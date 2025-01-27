@@ -20,6 +20,12 @@ document.getElementById('savePDF').addEventListener('click', () => {
 
   const filteredScreenshots = screenshots.filter((_, index) => pagesToKeep.includes(index.toString()));
 
+  // Collect annotations
+  filteredScreenshots.forEach((screenshot, index) => {
+    const annotationInput = document.querySelector(`.page-preview[data-index="${index}"] .annotation-input`);
+    screenshot.annotation = annotationInput ? annotationInput.value : '';
+  });
+
   generatePDF(filteredScreenshots);
 });
 
@@ -38,6 +44,12 @@ function showEditInterface() {
     const img = document.createElement('img');
     img.src = screenshot.dataUrl;
     pagePreview.appendChild(img);
+
+    const annotationInput = document.createElement('input');
+    annotationInput.type = 'text';
+    annotationInput.className = 'annotation-input';
+    annotationInput.placeholder = 'Add annotation...';
+    pagePreview.appendChild(annotationInput);
 
     const deleteButton = document.createElement('button');
     deleteButton.textContent = 'Delete Page';
@@ -58,6 +70,12 @@ function generatePDF(screenshots) {
     if (index > 0) pdf.addPage();
     pdf.addImage(screenshot.dataUrl, 'PNG', 10, 10, 180, 0);
     pdf.circle(screenshot.clickX, screenshot.clickY, 5, 'F');
+
+    // Add annotation text below the image
+    if (screenshot.annotation) {
+      pdf.setFontSize(12);
+      pdf.text(screenshot.annotation, 10, 200); // Adjust position as needed
+    }
   });
 
   pdf.save('TTL_Recording.pdf');
