@@ -4,7 +4,7 @@
   <title>TTL</title>
   <style>
     body {
-      width: 200px;
+      width: 300px;
       padding: 10px;
       font-family: Arial, sans-serif;
     }
@@ -14,11 +14,32 @@
       margin: 5px 0;
       font-size: 16px;
     }
+    #editSection {
+      display: none;
+    }
+    .page-preview {
+      margin: 10px 0;
+      border: 1px solid #ccc;
+      padding: 5px;
+      text-align: center;
+    }
+    .page-preview img {
+      max-width: 100%;
+      height: auto;
+    }
   </style>
 </head>
 <body>
-  <button id="startRecording">Start Recording</button>
-  <button id="stopRecording" disabled>Stop Recording</button>
+  <div id="recordingSection">
+    <button id="startRecording">Start Recording</button>
+    <button id="stopRecording" disabled>Stop Recording</button>
+  </div>
+  <div id="editSection">
+    <h3>Edit PDF</h3>
+    <div id="pagePreviews"></div>
+    <button id="savePDF">Save PDF</button>
+  </div>
+  <script src="lib/jspdf.umd.min.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
