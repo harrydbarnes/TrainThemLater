@@ -1,18 +1,40 @@
-let screenshots = [];
-
-document.getElementById('startRecording').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: 'startRecording' });
-  document.getElementById('startRecording').disabled = true;
-  document.getElementById('stopRecording').disabled = false;
+// Check recording state when the popup loads
+chrome.storage.local.get(['isRecording'], (result) => {
+  const isRecording = result.isRecording || false;
+  updateUI(isRecording);
 });
 
-document.getElementById('stopRecording').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: 'stopRecording' }, (response) => {
-    screenshots = response.screenshots;
-    showEditInterface();
+// Update the UI based on the recording state
+function updateUI(isRecording) {
+  document.getElementById('startRecording').disabled = isRecording;
+  document.getElementById('stopRecording').disabled = !isRecording;
+  if (isRecording) {
+    document.getElementById('status').textContent = 'Recording...';
+  } else {
+    document.getElementById('status').textContent = 'Recording stopped.';
+  }
+}
+
+// Start Recording button
+document.getElementById('startRecording').addEventListener('click', () => {
+  chrome.runtime.sendMessage({ action: 'startRecording' }, (response) => {
+    if (response.success) {
+      updateUI(true);
+    }
   });
 });
 
+// Stop Recording button
+document.getElementById('stopRecording').addEventListener('click', () => {
+  chrome.runtime.sendMessage({ action: 'stopRecording' }, (response) => {
+    if (response.screenshots) {
+      updateUI(false);
+      showEditInterface(response.screenshots);
+    }
+  });
+});
+
+// Save PDF button
 document.getElementById('savePDF').addEventListener('click', () => {
   const pagesToKeep = Array.from(document.querySelectorAll('.page-preview'))
     .filter((preview) => !preview.classList.contains('deleted'))
@@ -29,7 +51,8 @@ document.getElementById('savePDF').addEventListener('click', () => {
   generatePDF(filteredScreenshots);
 });
 
-function showEditInterface() {
+// Show the editing interface
+function showEditInterface(screenshots) {
   document.getElementById('recordingSection').style.display = 'none';
   document.getElementById('editSection').style.display = 'block';
 
@@ -37,46 +60,4 @@ function showEditInterface() {
   pagePreviews.innerHTML = '';
 
   screenshots.forEach((screenshot, index) => {
-    const pagePreview = document.createElement('div');
-    pagePreview.className = 'page-preview';
-    pagePreview.dataset.index = index;
-
-    const img = document.createElement('img');
-    img.src = screenshot.dataUrl;
-    pagePreview.appendChild(img);
-
-    const annotationInput = document.createElement('input');
-    annotationInput.type = 'text';
-    annotationInput.className = 'annotation-input';
-    annotationInput.placeholder = 'Add annotation...';
-    pagePreview.appendChild(annotationInput);
-
-    const deleteButton = document.createElement('button');
-    deleteButton.textContent = 'Delete Page';
-    deleteButton.addEventListener('click', () => {
-      pagePreview.classList.toggle('deleted');
-    });
-    pagePreview.appendChild(deleteButton);
-
-    pagePreviews.appendChild(pagePreview);
-  });
-}
-
-function generatePDF(screenshots) {
-  const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF();
-
-  screenshots.forEach((screenshot, index) => {
-    if (index > 0) pdf.addPage();
-    pdf.addImage(screenshot.dataUrl, 'PNG', 10, 10, 180, 0);
-    pdf.circle(screenshot.clickX, screenshot.clickY, 5, 'F');
-
-    // Add annotation text below the image
-    if (screenshot.annotation) {
-      pdf.setFontSize(12);
-      pdf.text(screenshot.annotation, 10, 200); // Adjust position as needed
-    }
-  });
-
-  pdf.save('TTL_Recording.pdf');
-}
+    const pagePreview =
