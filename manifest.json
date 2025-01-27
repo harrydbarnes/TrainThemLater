@@ -8,8 +8,7 @@
     "tabs",
     "storage",
     "scripting",
-    "desktopCapture",
-    "audioCapture"
+    "desktopCapture"
   ],
   "background": {
     "service_worker": "background.js"
