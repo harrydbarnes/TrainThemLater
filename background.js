@@ -1,6 +1,3 @@
-// Array to store screenshots
-let screenshots = [];
-
 // Listen for messages from the popup or content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('Message received in background.js:', message);
@@ -8,10 +5,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Handle different actions
   switch (message.action) {
     case 'startRecording':
-      // Reset screenshots array when recording starts
-      screenshots = [];
-      console.log('Recording started. Screenshots array reset.');
-      break;
+      // Initialize recording state and clear previous screenshots
+      chrome.storage.local.set({ isRecording: true, screenshots: [] }, () => {
+        console.log('Recording started. State updated.');
+        sendResponse({ success: true });
+      });
+      return true; // Indicates async response
 
     case 'captureScreenshot':
       // Capture a screenshot of the visible tab
@@ -21,25 +20,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ error: 'Failed to capture screenshot' });
         } else {
           console.log('Screenshot captured:', dataUrl);
-          // Add the screenshot and click coordinates to the screenshots array
-          screenshots.push({
-            dataUrl: dataUrl,
-            clickX: message.clickX,
-            clickY: message.clickY,
+          // Add the screenshot and click coordinates to storage
+          chrome.storage.local.get(['screenshots'], (result) => {
+            const screenshots = result.screenshots || [];
+            screenshots.push({
+              dataUrl: dataUrl,
+              clickX: message.clickX,
+              clickY: message.clickY,
+            });
+            chrome.storage.local.set({ screenshots }, () => {
+              sendResponse({ dataUrl, clickX: message.clickX, clickY: message.clickY });
+            });
           });
-          sendResponse({ dataUrl, clickX: message.clickX, clickY: message.clickY });
         }
       });
-      // Return true to indicate that sendResponse will be called asynchronously
-      return true;
+      return true; // Indicates async response
 
     case 'stopRecording':
-      // Send the collected screenshots back to the popup
-      console.log('Recording stopped. Sending screenshots to popup:', screenshots);
-      sendResponse({ screenshots });
-      // Reset the screenshots array for the next recording
-      screenshots = [];
-      break;
+      // Stop recording and send screenshots to the popup
+      chrome.storage.local.get(['screenshots'], (result) => {
+        const screenshots = result.screenshots || [];
+        console.log('Recording stopped. Sending screenshots to popup:', screenshots);
+        sendResponse({ screenshots });
+        // Reset recording state
+        chrome.storage.local.set({ isRecording: false, screenshots: [] });
+      });
+      return true; // Indicates async response
+
+    case 'getRecordingState':
+      // Get the current recording state
+      chrome.storage.local.get(['isRecording'], (result) => {
+        sendResponse({ isRecording: result.isRecording || false });
+      });
+      return true; // Indicates async response
 
     default:
       console.warn('Unknown action:', message.action);
