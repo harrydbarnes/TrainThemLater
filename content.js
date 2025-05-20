@@ -1,7 +1,9 @@
 // harrydbarnes/trainthemlater/TrainThemLater-main/content.js
 let isRecording = false;
-let audioSettingForNextStart = false; // This will store the preference
+let audioSettingForNextStart = false; 
 let overlayContainer;
+let startButton; // Define startButton in a broader scope
+let stopButton; // Define stopButton in a broader scope
 
 function initOverlay() {
     if (document.getElementById('ttlOverlayContainer')) {
@@ -23,7 +25,7 @@ function initOverlay() {
       border-radius: 12px; box-shadow: 0px 4px 15px rgba(0,0,0,0.3); font-family: Arial, sans-serif;
     `;
 
-    let startButton = document.getElementById('ttlOverlayStartButton');
+    startButton = document.getElementById('ttlOverlayStartButton'); // Assign to the broader scoped variable
     if (!startButton) {
         startButton = document.createElement('button');
         startButton.id = 'ttlOverlayStartButton';
@@ -31,7 +33,7 @@ function initOverlay() {
     }
     startButton.textContent = 'Start Record';
 
-    let stopButton = document.getElementById('ttlOverlayStopButton');
+    stopButton = document.getElementById('ttlOverlayStopButton'); // Assign to the broader scoped variable
     if (!stopButton) {
         stopButton = document.createElement('button');
         stopButton.id = 'ttlOverlayStopButton';
@@ -58,47 +60,93 @@ function initOverlay() {
     stopButton.removeEventListener('click', handleStopClick);
     stopButton.addEventListener('click', handleStopClick);
     
-    updateOverlayButtons(isRecording);
+    updateOverlayButtonsUI(isRecording);
 }
 
 function handleStartClick() {
+    if (isRecording) { // Prevent multiple start clicks if state is already recording
+        console.warn("Content.js: Start clicked, but already recording or start is in progress.");
+        return;
+    }
+    // Optimistically disable start, show "Starting..."
+    if (startButton) {
+        startButton.disabled = true;
+        startButton.textContent = 'Starting...';
+    }
+    if (stopButton) {
+        stopButton.style.display = 'none'; // Hide stop button momentarily
+    }
+
+
     console.log("Content.js: Overlay Start Button clicked. Audio pref for this start:", audioSettingForNextStart);
     chrome.runtime.sendMessage({ action: 'startRecording', recordAudio: audioSettingForNextStart }, (response) => {
         if (chrome.runtime.lastError) {
-            console.error("Content.js: Error from 'startRecording' message to background:", chrome.runtime.lastError.message);
-            updateOverlayButtons(false); 
+            console.error("Content.js: Error sending 'startRecording' message to background:", chrome.runtime.lastError.message);
+            // Revert UI if background communication fails immediately
+            if (startButton) {
+                startButton.disabled = false;
+                startButton.textContent = 'Start Record';
+            }
+            updateOverlayButtonsUI(false); // Ensure UI reflects that start failed
         } else if (response && response.success) {
             console.log("Content.js: 'startRecording' message acknowledged by background. Waiting for 'recordingActuallyStarted'.");
+            // UI update (button text change to Stop) will be handled by 'recordingActuallyStarted' listener
         } else {
             console.error("Content.js: Failed to start recording (background response):", response ? response.error : "No response or error");
-            updateOverlayButtons(false); 
+             // Revert UI if background reports failure
+            if (startButton) {
+                startButton.disabled = false;
+                startButton.textContent = 'Start Record';
+            }
+            updateOverlayButtonsUI(false); 
         }
-        // audioSettingForNextStart is typically reset by popup logic when it triggers this.
-        // If start is initiated purely by overlay, ensure it's reset or managed appropriately.
-        // For now, we assume popup sets it before overlay interaction.
     });
 }
 
 function handleStopClick() {
+    // Optimistically show "Stopping..."
+    if (stopButton) {
+        stopButton.disabled = true;
+        stopButton.textContent = 'Stopping...';
+    }
     console.log("Content.js: Overlay Stop Button clicked.");
     chrome.runtime.sendMessage({ action: 'stopRecording' }, (response) => {
         if (chrome.runtime.lastError) {
-            console.error("Content.js: Error from 'stopRecording' message:", chrome.runtime.lastError.message);
+            console.error("Content.js: Error sending 'stopRecording' message:", chrome.runtime.lastError.message);
+            // Revert UI if background communication fails
+            if (stopButton) {
+                stopButton.disabled = false;
+                stopButton.textContent = 'Stop Record';
+            }
         } else if (response && response.success) {
             console.log("Content.js: 'stopRecording' message acknowledged by background.");
-            if (overlayContainer) overlayContainer.style.display = 'none';
+            // UI update will be handled by 'recordingActuallyStopped'
+            // if (overlayContainer) overlayContainer.style.display = 'none'; // Delay hiding until confirmed
         } else {
             console.error("Content.js: Failed to stop recording (background response):", response ? response.error : "No error message");
+            // Revert UI if background reports failure
+            if (stopButton) {
+                stopButton.disabled = false;
+                stopButton.textContent = 'Stop Record';
+            }
         }
     });
 }
 
-function updateOverlayButtons(isRec) {
-    const startBtn = document.getElementById('ttlOverlayStartButton');
-    const stopBtn = document.getElementById('ttlOverlayStopButton');
-    if (startBtn) startBtn.style.display = isRec ? 'none' : 'inline-block';
-    if (stopBtn) stopBtn.style.display = isRec ? 'inline-block' : 'none';
-    console.log(`Content.js: Overlay buttons updated. isRecording is now: ${isRec}`);
+function updateOverlayButtonsUI(isRec) {
+    // const startBtn = document.getElementById('ttlOverlayStartButton'); // Use global startButton
+    // const stopBtn = document.getElementById('ttlOverlayStopButton');   // Use global stopButton
+    if (startButton) {
+        startButton.style.display = isRec ? 'none' : 'inline-block';
+        startButton.disabled = false; // Re-enable button
+        startButton.textContent = 'Start Record'; // Reset text
+    }
+    if (stopButton) {
+        stopButton.style.display = isRec ? 'inline-block' : 'none';
+        stopButton.disabled = false; // Re-enable button
+        stopButton.textContent = 'Stop Record'; // Reset text
+    }
+    console.log(`Content.js: Overlay buttons UI updated. isRecording visual state is now: ${isRec}`);
 }
 
 if (document.body) {
@@ -122,9 +170,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!overlayContainer && document.body) initOverlay(); 
       if (overlayContainer) overlayContainer.style.display = 'block';
         
-      chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
-        if (chrome.runtime.lastError) { ensureResponse({success: false, error: chrome.runtime.lastError.message}); return; }
-        if (response) { isRecording = !!response.isRecording; updateOverlayButtons(isRecording); }
+      chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => { // Check actual state from background
+        if (chrome.runtime.lastError) { 
+            isRecording = false; // Assume not recording if error
+            console.warn("Content.js: Error getting recording state on showOverlayButtons:", chrome.runtime.lastError.message);
+            ensureResponse({success: false, error: chrome.runtime.lastError.message}); 
+        } else if (response) { 
+            isRecording = !!response.isRecording; 
+        } else {
+            isRecording = false; // Assume not recording if no response
+        }
+        updateOverlayButtonsUI(isRecording);
         ensureResponse({success: true});
       });
       return true; 
@@ -134,51 +190,52 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ensureResponse({success: true});
       return false; 
 
-    case 'setAudioPreference': // New case to handle audio preference from popup
+    case 'setAudioPreference': 
       audioSettingForNextStart = message.recordAudio;
       console.log("Content.js: Audio preference set to", audioSettingForNextStart);
       ensureResponse({success: true});
-      return false; // Sync
+      return false; 
 
     case 'recordingActuallyStarted':
       console.log("Content.js: 'recordingActuallyStarted' received from background.");
       isRecording = true;
-      updateOverlayButtons(true);
+      updateOverlayButtonsUI(true);
       ensureResponse({success: true});
       return false; 
 
     case 'recordingActuallyStopped':
       console.log("Content.js: 'recordingActuallyStopped' received from background.");
       isRecording = false;
-      updateOverlayButtons(false);
+      updateOverlayButtonsUI(false);
+      if (overlayContainer) overlayContainer.style.display = 'none'; // Hide overlay now
       ensureResponse({success: true});
       return false; 
 
-    case 'recordingStateChanged':
+    case 'recordingStateChanged': // This might be redundant if using ActuallyStarted/Stopped
       isRecording = message.newIsRecordingState;
-      updateOverlayButtons(isRecording);
+      updateOverlayButtonsUI(isRecording);
       ensureResponse({success: true});
       return false; 
 
-    case 'triggerStartRecording': // This is called by popup.js
-      const startBtn = document.getElementById('ttlOverlayStartButton');
-      if (!isRecording && startBtn) {
-        audioSettingForNextStart = message.recordAudio; // Set audio pref from popup
+    case 'triggerStartRecording': 
+      // const startBtn = document.getElementById('ttlOverlayStartButton'); // Use global startButton
+      if (!isRecording && startButton && !startButton.disabled) { // Check if not already starting
+        audioSettingForNextStart = message.recordAudio; 
         console.log("Content.js: Triggering overlay start button click. Audio pref:", audioSettingForNextStart);
-        startBtn.click(); // This will call handleStartClick which uses audioSettingForNextStart
+        startButton.click(); 
       } else {
-        console.warn("Content.js: triggerStartRecording received but already recording or no start button.");
+        console.warn("Content.js: triggerStartRecording received but already recording, no start button, or start already in progress.");
       }
       ensureResponse({success: true});
       return false; 
 
-    case 'triggerStopRecording': // This is called by popup.js
-      const stopBtn = document.getElementById('ttlOverlayStopButton');
-      if (isRecording && stopBtn) {
+    case 'triggerStopRecording': 
+      // const stopBtn = document.getElementById('ttlOverlayStopButton'); // Use global stopButton
+      if (isRecording && stopButton && !stopButton.disabled) { // Check if not already stopping
         console.log("Content.js: Triggering overlay stop button click.");
-        stopBtn.click();
+        stopButton.click();
       } else {
-         console.warn("Content.js: triggerStopRecording received but not recording or no stop button.");
+         console.warn("Content.js: triggerStopRecording received but not recording, no stop button, or stop already in progress.");
       }
       ensureResponse({success: true});
       return false; 
@@ -195,8 +252,13 @@ chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
   if (chrome.runtime.lastError) { return; }
   if (response) {
     isRecording = !!response.isRecording;
-    if (overlayContainer && overlayContainer.style.display === 'block') {
-        updateOverlayButtons(isRecording);
+    // Ensure overlay is initialized before trying to update buttons
+    if (!overlayContainer && document.body) {
+        initOverlay();
+    } else if (overlayContainer && overlayContainer.style.display === 'block') {
+        updateOverlayButtonsUI(isRecording);
+    } else if (overlayContainer) { // If overlay exists but is hidden, still set the correct button states for when it's shown
+        updateOverlayButtonsUI(isRecording);
     }
   }
 });
