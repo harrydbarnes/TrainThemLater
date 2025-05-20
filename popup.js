@@ -1,70 +1,71 @@
 // harrydbarnes/trainthemlater/TrainThemLater-main/popup.js
-// At the top of popup.js
 let currentScreenshots = [];
 let drawingEnabled = false;
 let currentDrawingTool = 'none';
 let isDrawing = false;
 let startX, startY;
 let activeCanvas = null;
-let activeScreenshotIndex = -1; // Will store originalIndex if needed for canvas operations
+let activeScreenshotIndex = -1; 
 
-// UI Sections
 const initialSection = document.getElementById('initialSection');
 const recordingSection = document.getElementById('recordingSection');
 const editSection = document.getElementById('editSection');
-const statusDiv = document.getElementById('status'); // Shared status div in initialSection
-const recordingStatusDiv = recordingSection.querySelector('#status'); // Status div in recordingSection
+const statusDiv = document.getElementById('status'); 
+const recordingStatusDiv = recordingSection.querySelector('#status'); 
 
 
-// Handle being opened in a new tab for editor view
 document.addEventListener('DOMContentLoaded', () => {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('view') === 'editor') {
         console.log("Popup.js: Detected editor view from URL params.");
-        chrome.storage.local.get('editorData', (result) => {
-            if (chrome.runtime.lastError) {
-                console.error("Popup.js: Error getting editorData from storage:", chrome.runtime.lastError.message);
-                if (initialSection) initialSection.style.display = 'block';
-                if (statusDiv) statusDiv.textContent = "Error loading editor data.";
-                return;
-            }
-            if (result.editorData) {
-                console.log("Popup.js: Editor data found in storage.", result.editorData);
-                const data = result.editorData;
-                const downloadAudioButton = document.getElementById('downloadAudioButton');
-                if (downloadAudioButton) {
-                    downloadAudioButton.style.display = data.audioAvailable ? 'block' : 'none';
+        if (urlParams.get('source') === 'background') {
+            chrome.storage.local.get('pendingEditorData', (result) => {
+                if (chrome.runtime.lastError) {
+                    console.error("Popup.js: Error getting pendingEditorData:", chrome.runtime.lastError.message);
+                    if (initialSection) initialSection.style.display = 'block';
+                    if (statusDiv) statusDiv.textContent = "Error loading editor data.";
+                    return;
                 }
-
-                // Ensure sections are correctly displayed
-                if (initialSection) initialSection.style.display = 'none';
-                if (recordingSection) recordingSection.style.display = 'none';
-                if (editSection) editSection.style.display = 'block';
-                
-                showEditInterface(data.screenshots ? data.screenshots.map(s => ({...s})) : []);
-
-            } else {
-                console.warn("Popup.js: Editor view specified, but no editorData found in storage.");
-                if (initialSection) initialSection.style.display = 'block';
-                if (statusDiv) statusDiv.textContent = "Ready to record. No active edit session found.";
-            }
-        });
+                if (result.pendingEditorData) {
+                    console.log("Popup.js: Editor data found from pendingEditorData.", result.pendingEditorData);
+                    const data = result.pendingEditorData;
+                    const downloadAudioButton = document.getElementById('downloadAudioButton');
+                    if (downloadAudioButton) {
+                        downloadAudioButton.style.display = data.audioAvailable ? 'block' : 'none';
+                    }
+                    if (initialSection) initialSection.style.display = 'none';
+                    if (recordingSection) recordingSection.style.display = 'none';
+                    if (editSection) editSection.style.display = 'block';
+                    showEditInterface(data.screenshots ? data.screenshots.map(s => ({...s})) : []);
+                    
+                    chrome.storage.local.remove('pendingEditorData', () => {
+                        if (chrome.runtime.lastError) {
+                            console.error("Popup.js: Error clearing pendingEditorData:", chrome.runtime.lastError.message);
+                        } else {
+                            console.log("Popup.js: pendingEditorData cleared.");
+                        }
+                    });
+                } else {
+                    console.warn("Popup.js: Editor view (from background) but no pendingEditorData found.");
+                    loadEditorDataFromStorage(); 
+                }
+            });
+        } else {
+            loadEditorDataFromStorage();
+        }
     } else {
-        // Standard popup initialization
         console.log("Popup.js: Initializing as standard popup action.");
         if (initialSection) initialSection.style.display = 'block';
         if (recordingSection) recordingSection.style.display = 'none';
         if (editSection) editSection.style.display = 'none';
         if (statusDiv) statusDiv.textContent = 'Ready to record!';
 
-        // Query background for current recording state to set UI correctly
         chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
             if (chrome.runtime.lastError) {
                 console.warn("Popup.js: Error getting initial recording state:", chrome.runtime.lastError.message);
                 return;
             }
             if (response) {
-                // If already recording, directly show recording section (though controls are on page)
                 if (response.isRecording) {
                     if (initialSection) initialSection.style.display = 'none';
                     if (recordingSection) recordingSection.style.display = 'block';
@@ -75,36 +76,67 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+function loadEditorDataFromStorage() { 
+    chrome.storage.local.get('editorData', (result) => {
+        if (chrome.runtime.lastError) {
+            console.error("Popup.js: Error getting editorData from storage:", chrome.runtime.lastError.message);
+            if (initialSection) initialSection.style.display = 'block';
+            if (statusDiv) statusDiv.textContent = "Error loading editor data (from editorData).";
+            return;
+        }
+        if (result.editorData) {
+            console.log("Popup.js: Editor data found in editorData storage.", result.editorData);
+            const data = result.editorData;
+            const downloadAudioButton = document.getElementById('downloadAudioButton');
+            if (downloadAudioButton) {
+                downloadAudioButton.style.display = data.audioAvailable ? 'block' : 'none';
+            }
+            if (initialSection) initialSection.style.display = 'none';
+            if (recordingSection) recordingSection.style.display = 'none';
+            if (editSection) editSection.style.display = 'block';
+            showEditInterface(data.screenshots ? data.screenshots.map(s => ({...s})) : []);
+        } else {
+            console.warn("Popup.js: Editor view specified, but no editorData found in storage either.");
+            if (editSection && editSection.style.display === 'block') { 
+                const pagePreviews = document.getElementById('pagePreviews');
+                if(pagePreviews) pagePreviews.innerHTML = '<p>No data loaded. Try recording again.</p>';
+            } else {
+                 if (initialSection) initialSection.style.display = 'block';
+                 if (statusDiv) statusDiv.textContent = "Ready to record. No active edit session found.";
+            }
+        }
+    });
+}
 
-// "Let's Record" button
 document.getElementById('showRecordButtons').addEventListener('click', () => {
   if (initialSection) initialSection.style.display = 'none';
   if (recordingSection) recordingSection.style.display = 'block';
-  if (recordingStatusDiv) recordingStatusDiv.textContent = "Click 'Start Record' on the page overlay (bottom right).";
-
+  
   const shouldRecordAudio = document.getElementById('recordAudioCheckbox').checked;
+  if (recordingStatusDiv) recordingStatusDiv.textContent = "Use page overlay (bottom right) to Start/Stop.";
+
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs && tabs.length > 0 && tabs[0].id) {
-      // Send audio preference to content script, so it can use it when 'startRecording' is triggered from overlay
       chrome.tabs.sendMessage(tabs[0].id, { action: 'setAudioPreference', recordAudio: shouldRecordAudio });
       chrome.tabs.sendMessage(tabs[0].id, { action: 'showOverlayButtons' }, (response) => {
         if (chrome.runtime.lastError) {
           console.log('Popup.js: Failed to send showOverlayButtons to content script:', chrome.runtime.lastError.message);
            if (recordingStatusDiv) recordingStatusDiv.textContent = "Error showing overlay. Try refreshing the page.";
         } else {
-            // Optionally close the popup after instructing the user
-            // statusDiv.textContent = "Click 'Start Record' on the page overlay (bottom right).";
-            // setTimeout(() => window.close(), 2000); // Close popup after 2 seconds
+            // Consider closing popup if not an editor tab
+             const urlParams = new URLSearchParams(window.location.search);
+             if (urlParams.get('view') !== 'editor') {
+                setTimeout(() => window.close(), 500); // Short delay before closing
+             }
         }
       });
     } else {
       console.error("Popup.js: Could not find active tab to show overlay buttons.");
-      if (recordingStatusDiv) recordingStatusDiv.textContent = "Error: No active tab found. Please ensure you are on a web page.";
+      if (recordingStatusDiv) recordingStatusDiv.textContent = "Error: No active tab. Please ensure you are on a web page.";
     }
   });
 
-  // Update UI based on current recording state (buttons are removed, but status is useful)
    chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
     if (chrome.runtime.lastError) {
         console.warn("Popup.js: Error getting recording state for showRecordButtons:", chrome.runtime.lastError.message);
@@ -112,13 +144,12 @@ document.getElementById('showRecordButtons').addEventListener('click', () => {
     }
     if (response && response.isRecording !== undefined) {
         if (recordingStatusDiv) {
-            recordingStatusDiv.textContent = response.isRecording ? 'Recording active. Use overlay to stop.' : "Click 'Start Record' on the page overlay (bottom right).";
+            recordingStatusDiv.textContent = response.isRecording ? 'Recording active. Use overlay to stop.' : "Use page overlay (bottom right) to Start/Stop.";
         }
     }
   });
 });
 
-// Back to Initial (from Recording Setup Section)
 document.getElementById('backToInitial').addEventListener('click', () => {
     if (recordingSection) recordingSection.style.display = 'none';
     if (initialSection) initialSection.style.display = 'block';
@@ -139,51 +170,64 @@ document.getElementById('backToInitial').addEventListener('click', () => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("Popup.js received message:", message.action);
   if (message.action === 'showEditInterfaceMessage') {
-    console.log("Popup.js: Received screenshots for editing:", message.data);
+    console.log("Popup.js: Received 'showEditInterfaceMessage', data:", message.data);
+    const urlParams = new URLSearchParams(window.location.search);
+    const isEditorView = urlParams.get('view') === 'editor';
 
     chrome.storage.local.set({ editorData: message.data }, () => {
-      if (chrome.runtime.lastError) {
-        console.error("Popup.js: Error setting editorData in local storage:", chrome.runtime.lastError.message);
-        // alert("Error preparing editor. Please try again."); // Avoid alert if popup might be closing
-        sendResponse({success: false, error: "Storage error"});
-        return;
-      }
-      
-      // Open the editor in a new tab regardless of current context
-      console.log("Popup.js: Opening editor in a new tab.");
-      chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=editor&timestamp=' + Date.now()) });
-      
-      // If this is the popup action window, close it as the editor will open in a new tab.
-      // Check if it's the popup by seeing if it's not a tab (sender.tab will be undefined or its id will be TAB_ID_NONE for background)
-      // or if it's a window without an opener (typical for popups)
-      const amIPopup = !sender || !sender.tab || (sender.tab && sender.tab.id === chrome.tabs.TAB_ID_NONE && !window.opener) || (window.location.search.indexOf('view=editor') === -1) ;
-      
-      if (amIPopup) {
-          // Only close if it's the popup and not already an editor tab
-          if (window.location.search.indexOf('view=editor') === -1) {
-            console.log("Popup.js: Closing action popup as editor tab is opening.");
-            window.close();
-          }
-      }
-      sendResponse({success: true});
+        if (chrome.runtime.lastError) {
+            console.error("Popup.js: Error setting editorData in 'showEditInterfaceMessage':", chrome.runtime.lastError.message);
+            sendResponse({success: false, error: "Storage error"});
+            return;
+        }
+        
+        if (isEditorView) {
+            console.log("Popup.js: Refreshing current editor tab with new data.");
+            const downloadAudioButton = document.getElementById('downloadAudioButton');
+            if (downloadAudioButton) {
+                downloadAudioButton.style.display = message.data.audioAvailable ? 'block' : 'none';
+            }
+            showEditInterface(message.data.screenshots ? message.data.screenshots.map(s => ({...s})) : []);
+        } else {
+            // This case (non-editor popup receiving this) should be rare now
+            // as background.js directly opens a new editor tab.
+            // If it happens, it implies background didn't open the tab or this is an old popup.
+            console.log("Popup.js: 'showEditInterfaceMessage' received by non-editor. Background should open new tab.");
+            // To be safe, we can still try to open a new editor tab here if one isn't detected.
+            chrome.tabs.query({ url: chrome.runtime.getURL('popup.html?view=editor*') }, (tabs) => {
+                if (tabs.length === 0) { // Only open if no editor tab seems to exist or is being opened
+                     chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=editor&source=popupMessageFallback&timestamp=' + Date.now()) });
+                }
+            });
+            if (window.location.pathname.endsWith('popup.html') && !isEditorView) {
+                 setTimeout(() => window.close(), 100); 
+            }
+        }
+        sendResponse({success: true});
     });
-    return true; // Async due to storage.set
+    return true; 
 
   } else if (message.action === 'recordingActuallyStarted') {
-    if (recordingStatusDiv) recordingStatusDiv.textContent = 'Recording active. Use overlay to stop.';
     if (initialSection) initialSection.style.display = 'none';
     if (recordingSection) recordingSection.style.display = 'block';
+    if (recordingStatusDiv) recordingStatusDiv.textContent = 'Recording active. Use overlay to stop.';
     sendResponse({success: true});
   } else if (message.action === 'recordingActuallyStopped') {
-    if (recordingStatusDiv) recordingStatusDiv.textContent = 'Recording stopped. Preparing editor...';
-    // The showEditInterfaceMessage will handle opening the editor tab.
+    if (recordingStatusDiv && recordingSection && recordingSection.style.display === 'block') {
+        recordingStatusDiv.textContent = 'Recording stopped. Editor is opening...';
+    }
+     // It's possible this popup is the action popup and should close
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('view') !== 'editor' && window.location.pathname.endsWith('popup.html')) {
+        console.log("Popup.js: Action popup closing on recordingActuallyStopped.");
+        setTimeout(() => window.close(), 500); // Give a moment for other actions
+    }
     sendResponse({success: true});
   }
-  return true;
+  return true; 
 });
 
 
-// Back to Record Button (in Edit Section)
 document.getElementById('backToRecord').addEventListener('click', () => {
   if (editSection) editSection.style.display = 'none';
   if (initialSection) initialSection.style.display = 'block';
@@ -203,7 +247,6 @@ document.getElementById('backToRecord').addEventListener('click', () => {
     }
   });
 
-  // If this is an editor tab, close it.
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('view') === 'editor') {
     chrome.tabs.getCurrent(tab => {
@@ -215,7 +258,6 @@ document.getElementById('backToRecord').addEventListener('click', () => {
 });
 
 
-// Save PDF button
 document.getElementById('savePDF').addEventListener('click', () => {
   const filteredScreenshots = [];
   currentScreenshots.forEach((screenshot) => { 
@@ -233,7 +275,6 @@ document.getElementById('savePDF').addEventListener('click', () => {
   }
 });
 
-// Show the editing interface
 function showEditInterface(screenshotsData) {
   currentScreenshots = screenshotsData.map((s, index) => ({
     ...s,
@@ -665,7 +706,7 @@ async function generatePDF(screenshotsToProcess) {
     alert("An error occurred while generating the PDF. Check console for details.");
   } finally {
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('view') !== 'editor') { // Only reset if it was the popup action window
+    if (urlParams.get('view') !== 'editor') { 
         if (initialSection) initialSection.style.display = 'block';
         if (recordingSection) recordingSection.style.display = 'none';
         if (editSection) editSection.style.display = 'none';
@@ -682,7 +723,6 @@ async function generatePDF(screenshotsToProcess) {
   }
 }
 
-// Download Audio Button
 document.getElementById('downloadAudioButton').addEventListener('click', () => {
   chrome.runtime.sendMessage({ action: 'getAudioBlob' }, (response) => {
     if (chrome.runtime.lastError) {
@@ -773,7 +813,6 @@ function updateDrawingToolButtons() {
     updateActiveToolButton(null); 
   }
 }
-
 
 function updateActiveToolButton(activeButtonId) {
     ['toolHighlighter', 'toolCircle', 'toolCrop'].forEach(id => {
