@@ -19,7 +19,7 @@ function updateActionIcon(recording) {
     if (chrome.runtime.lastError) {
       console.warn("Error setting action icon:", chrome.runtime.lastError.message);
     } else {
-      console.log("Action icon updated to:", path);
+      // console.log("Action icon updated to:", path); // Potentially too noisy
     }
   });
 }
@@ -35,7 +35,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       updateActionIcon(true);
       chrome.storage.local.set({ screenshots: [] }, () => { // Clear previous screenshots
         console.log('Recording starting...');
-        // Notify popup that recording *actually* started
+        // Notify popup and content script that recording *actually* started
         chrome.runtime.sendMessage({ action: 'recordingActuallyStarted' });
 
         if (recordAudio) {
@@ -52,7 +52,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             audioStream = stream;
             mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
             audioChunks = [];
-            recordedAudioBlob = null;
+            recordedAudioBlob = null; // Reset previous audio blob
 
             mediaRecorder.ondataavailable = (event) => {
               if (event.data.size > 0) audioChunks.push(event.data);
@@ -66,29 +66,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 console.log('Audio recording stopped, no data in audioChunks.');
               }
               audioChunks = [];
+              // Ensure stream tracks are stopped here if mediaRecorder stops unexpectedly
+              if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+                audioStream = null;
+              }
             };
             mediaRecorder.start();
             console.log('MediaRecorder started for audio.');
             stream.oninactive = () => {
               console.log('Audio stream became inactive.');
               if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
-              if (audioStream) audioStream.getTracks().forEach(track => track.stop());
-              audioStream = null;
+              // audioStream tracks might already be stopped by onstop, but double-check
+              if (audioStream) {
+                 audioStream.getTracks().forEach(track => track.stop());
+                 audioStream = null;
+              }
             };
             sendResponse({ success: true });
           });
         } else {
+          recordedAudioBlob = null; // Explicitly nullify if not recording audio
           sendResponse({ success: true });
         }
       });
       // Persist the reliable state
       chrome.storage.local.set({ isRecording: true });
-      return true;
+      return true; // Keep true for async response from tabCapture
 
     case 'captureScreenshot':
       if (!isActuallyRecording) {
         sendResponse({ error: 'Not recording.' });
-        return true;
+        return true; // Keep true for async response if needed, or false if sync
       }
       chrome.tabs.captureVisibleTab(null, { format: 'png' }, (dataUrl) => {
         if (chrome.runtime.lastError) {
@@ -101,12 +110,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               dataUrl: dataUrl,
               clickX: message.clickX,
               clickY: message.clickY,
-              annotation: '', // Initialize annotation
-              drawings: [],   // Initialize drawings
-              cropRegion: null // Initialize cropRegion
+              annotation: '',
+              drawings: [],
+              cropRegion: null
             });
             chrome.storage.local.set({ screenshots }, () => {
-              sendResponse({ success: true, dataUrl: dataUrl.substring(0,50)+"..." }); // Send confirmation
+              sendResponse({ success: true, dataUrl: dataUrl.substring(0,50)+"..." });
             });
           });
         }
@@ -115,84 +124,101 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'stopRecording':
       if (!isActuallyRecording) {
-        sendResponse({ error: 'Was not recording.' });
+        // Though UI should prevent this, handle graciously
+        sendResponse({ error: 'Was not recording or already stopped.', success: false });
         return true;
       }
-      isActuallyRecording = false;
+      isActuallyRecording = false; // Set immediately
       updateActionIcon(false);
 
-      const processStop = () => {
+      const processStopAndRespond = () => {
         chrome.storage.local.get(['screenshots'], (result) => {
           const screenshots = result.screenshots || [];
-           // Persist reliable state and clear screenshots from storage *after* sending
-          chrome.storage.local.set({ isRecording: false, screenshots: [] }, () => {
+          chrome.storage.local.set({ isRecording: false, screenshots: [] }, () => { // Clear storage
             console.log('isRecording set to false and screenshots cleared from storage.');
-            sendResponse({ screenshots, audioAvailable: !!recordedAudioBlob });
-             // Also notify popup/content script that recording actually stopped
-            chrome.runtime.sendMessage({ action: 'recordingActuallyStopped' });
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                if (tabs && tabs.length > 0 && tabs[0].id) {
-                    chrome.tabs.sendMessage(tabs[0].id, { action: 'recordingStateChanged', newIsRecordingState: false });
-                }
+
+            // Send message to popup.js to show the edit interface
+            chrome.runtime.sendMessage({
+              action: 'showEditInterfaceMessage',
+              data: {
+                screenshots: screenshots,
+                audioAvailable: !!recordedAudioBlob
+              }
             });
+
+            // Notify all parts that recording actually stopped
+            chrome.runtime.sendMessage({ action: 'recordingActuallyStopped' });
+            // Notify active tab content script about state change
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+              if (tabs && tabs.length > 0 && tabs[0].id) {
+                chrome.tabs.sendMessage(tabs[0].id, { action: 'recordingStateChanged', newIsRecordingState: false });
+              }
+            });
+            // Send a simplified success response to the original caller (e.g., content.js)
+            sendResponse({ success: true, stopped: true });
           });
         });
       };
 
       if (mediaRecorder && mediaRecorder.state === "recording") {
-        mediaRecorder.onstop = () => { // Override onstop to ensure it calls processStop
+        mediaRecorder.onstop = () => { // This will be called when mediaRecorder.stop() completes
           if (audioChunks.length > 0) {
             recordedAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
             console.log('Audio recording stopped during main stop, blob created:', recordedAudioBlob?.size);
           } else {
-            recordedAudioBlob = null;
-            console.log('Audio recording stopped during main stop, no data.');
+            recordedAudioBlob = null; // Ensure it's null if no chunks
+            console.log('Audio recording stopped, no data.');
           }
-          audioChunks = [];
-          if (audioStream) audioStream.getTracks().forEach(track => track.stop());
-          audioStream = null;
-          mediaRecorder = null; // Clear mediaRecorder
-          processStop();
+          audioChunks = []; // Clear chunks
+          if (audioStream) { // Stop stream tracks *after* blob is processed
+            audioStream.getTracks().forEach(track => track.stop());
+            audioStream = null;
+          }
+          mediaRecorder = null; // Clean up MediaRecorder instance
+          processStopAndRespond();
         };
         mediaRecorder.stop();
       } else {
-        if (audioStream) audioStream.getTracks().forEach(track => track.stop()); // Ensure tracks are stopped
-        audioStream = null;
+        // No active mediaRecorder, or it was already stopped
+        if (audioStream) {
+          audioStream.getTracks().forEach(track => track.stop());
+          audioStream = null;
+        }
         mediaRecorder = null;
-        processStop(); // No audio or already stopped
+        recordedAudioBlob = null; // Ensure no stale audio blob if recording wasn't active
+        audioChunks = [];
+        processStopAndRespond();
       }
-      return true;
+      return true; // Indicate async response
 
     case 'getAudioBlob':
       if (recordedAudioBlob) {
         sendResponse({ audioBlob: recordedAudioBlob });
-        // Do not clear recordedAudioBlob here, popup might want to try again if download fails.
-        // Or, implement a way for popup to signal successful download. For now, it persists until next recording.
       } else {
         sendResponse({ audioBlob: null });
       }
       return true;
 
     case 'getRecordingState':
+      // Respond with the more reliable internal state
       sendResponse({ isRecording: isActuallyRecording });
-      return true;
+      return true; // Keep true if any path is async, but this one is sync
 
     default:
       console.warn('Unknown action in background:', message.action);
       sendResponse({ error: 'Unknown action' });
-      return false; // No async response for unknown
+      return false;
   }
 });
 
-// Set initial icon state
 chrome.runtime.onStartup.addListener(() => {
-  isActuallyRecording = false; // Reset on browser startup
-  chrome.storage.local.set({ isRecording: false });
+  isActuallyRecording = false;
+  chrome.storage.local.set({ isRecording: false, screenshots: [] }); // Clear on startup
   updateActionIcon(false);
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  isActuallyRecording = false; // Reset on extension install/update
-  chrome.storage.local.set({ isRecording: false });
+  isActuallyRecording = false;
+  chrome.storage.local.set({ isRecording: false, screenshots: [] }); // Clear on install/update
   updateActionIcon(false);
 });
