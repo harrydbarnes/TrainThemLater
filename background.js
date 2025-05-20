@@ -5,20 +5,29 @@ let audioChunks = [];
 let recordedAudioBlob = null;
 let isActuallyRecording = false;
 
-const RECORDING_ICON_PATH = { "16": "icons/icon16_rec.png", "48": "icons/icon48_rec.png", "128": "icons/icon128_rec.png" };
-const DEFAULT_ICON_PATH = { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128_rec.png" };
+// Ensure these paths are correct and files exist
+const RECORDING_ICON_PATH = {
+  "16": "icons/icon16_rec.png",
+  "48": "icons/icon48_rec.png", // Make sure this file exists
+  "128": "icons/icon128_rec.png" // Make sure this file exists
+};
+const DEFAULT_ICON_PATH = {
+  "16": "icons/icon16.png",
+  "48": "icons/icon48.png",
+  "128": "icons/icon128.png"
+};
 
 function updateActionIcon(recording) {
   const pathDetails = recording ? RECORDING_ICON_PATH : DEFAULT_ICON_PATH;
   chrome.action.setIcon({ path: pathDetails }, () => {
     if (chrome.runtime.lastError) {
-      console.warn(`Error setting action icon to ${recording ? 'recording' : 'default'}:`, chrome.runtime.lastError.message);
+      console.warn(`Background: Error setting action icon to ${recording ? 'recording' : 'default'}: ${chrome.runtime.lastError.message}. Path attempted:`, pathDetails);
     }
   });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log(`Background: Received action: ${message.action} from ${sender.tab ? 'tab ' + sender.tab.id : 'extension'}`);
+  console.log(`Background: Received action: ${message.action} from ${sender.tab ? 'tab ' + sender.tab.id : 'extension (popup or self)'}`);
 
   switch (message.action) {
     case 'startRecording':
@@ -26,33 +35,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (isActuallyRecording) {
         console.warn("Background: 'startRecording' called but already recording.");
         sendResponse({ success: false, error: "Already recording." });
-        return false; // Synchronous response
+        return false; // Indicate sync response
       }
 
-      isActuallyRecording = true; // Set state immediately
+      isActuallyRecording = true;
       updateActionIcon(true);
 
-      // Clear previous screenshots and set recording state in storage
       chrome.storage.local.set({ screenshots: [], isRecording: true }, () => {
         if (chrome.runtime.lastError) {
-          console.error("Background: Storage error during startRecording setup:", chrome.runtime.lastError.message);
-          isActuallyRecording = false; // Revert optimistic state
-          updateActionIcon(false);
-          chrome.storage.local.set({ isRecording: false }); // Attempt to correct storage
-          sendResponse({ success: false, error: "Storage setup failed for recording." });
-          // Consider not sending 'recordingActuallyStarted' if setup fails critically
+          console.error("Background: Storage error on startRecording (set screenshots/isRecording):", chrome.runtime.lastError.message);
+          isActuallyRecording = false; updateActionIcon(false);
+          chrome.storage.local.set({ isRecording: false });
+          sendResponse({ success: false, error: "Storage error during start." });
           return;
         }
-
         console.log('Background: Recording starting...');
+
+        // Define a function to be called after audio setup (or if no audio)
+        const afterAudioSetup = (audioSetupSuccess = true) => {
+            if (audioSetupSuccess) {
+                sendResponse({ success: true }); // ACK to original sender (content.js)
+                console.log("Background: Sent {success: true} for startRecording. Now sending 'recordingActuallyStarted'.");
+                chrome.runtime.sendMessage({ action: 'recordingActuallyStarted' }); // Global notification
+            } else {
+                // Error handling for audio setup failure already calls sendResponse
+                // and reverts state. This path should not be hit if audioSetupSuccess is false
+                // due to returns in the error paths.
+            }
+        };
 
         if (recordAudio) {
           chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
             if (chrome.runtime.lastError || !stream) {
               console.error('Background: Error starting tab capture:', chrome.runtime.lastError?.message || "Stream is null");
               isActuallyRecording = false; updateActionIcon(false); chrome.storage.local.set({ isRecording: false });
-              sendResponse({ success: false, error: 'Failed to start audio capture.' });
-              chrome.runtime.sendMessage({ action: 'recordingActuallyStopped' }); // Notify all UIs of failure
+              sendResponse({ success: false, error: 'Failed to start audio capture.' }); // Respond to content.js
+              chrome.runtime.sendMessage({ action: 'recordingActuallyStopped' }); // Notify all UIs
               return;
             }
             audioStream = stream;
@@ -77,20 +95,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             };
             mediaRecorder.start();
             console.log('Background: MediaRecorder started for audio.');
-            stream.oninactive = () => {
-              console.log('Background: Audio stream became inactive.');
-              if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
-            };
-            sendResponse({ success: true }); // ACK to original sender (content.js)
-            chrome.runtime.sendMessage({ action: 'recordingActuallyStarted' }); // Global notification
+            stream.oninactive = () => { if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop(); };
+            afterAudioSetup(true);
           });
         } else { // No audio
           recordedAudioBlob = null;
-          sendResponse({ success: true }); // ACK to original sender (content.js)
-          chrome.runtime.sendMessage({ action: 'recordingActuallyStarted' }); // Global notification
+          afterAudioSetup(true);
         }
       });
-      return true; // Crucial for async sendResponse
+      return true; // Crucial: sendResponse is asynchronous
 
     case 'captureScreenshot':
       if (!isActuallyRecording) {
@@ -104,7 +117,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           chrome.storage.local.get(['screenshots'], (result) => {
             const screenshots = result.screenshots || [];
             screenshots.push({
-              dataUrl: dataUrl, clickX: message.clickX, clickY: message.clickY,
+              dataUrl, clickX: message.clickX, clickY: message.clickY,
               annotation: '', drawings: [], cropRegion: null
             });
             chrome.storage.local.set({ screenshots }, () => {
@@ -120,32 +133,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'stopRecording':
-      if (!isActuallyRecording && mediaRecorder?.state !== "recording") { // Check both
+      if (!isActuallyRecording && (!mediaRecorder || mediaRecorder.state !== "recording")) {
         sendResponse({ error: 'Was not recording or already stopped.', success: false });
         return false;
       }
-      const wasRecordingFlag = isActuallyRecording;
+      const wasActuallyRecording = isActuallyRecording;
       isActuallyRecording = false;
       updateActionIcon(false);
 
       const processStopAndRespond = () => {
         chrome.storage.local.get(['screenshots'], (result) => {
           const screenshots = result.screenshots || [];
-          // Clear storage *after* processing, ensure isRecording is reliably false
           chrome.storage.local.set({ isRecording: false, screenshots: [] }, () => {
             console.log('Background: isRecording set to false by stopRecording, screenshots cleared.');
             chrome.runtime.sendMessage({
               action: 'showEditInterfaceMessage',
-              data: { screenshots: screenshots, audioAvailable: !!recordedAudioBlob }
+              data: { screenshots, audioAvailable: !!recordedAudioBlob }
             });
-            chrome.runtime.sendMessage({ action: 'recordingActuallyStopped' }); // Global notification
+            chrome.runtime.sendMessage({ action: 'recordingActuallyStopped' });
             chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
               if (tabs[0] && tabs[0].id) {
                 chrome.tabs.sendMessage(tabs[0].id, { action: 'recordingStateChanged', newIsRecordingState: false });
               }
             });
-            if (wasRecordingFlag || mediaRecorder) { // Ensure response is sent if an action was taken
-                 sendResponse({ success: true, stopped: true });
+            if (wasRecordingFlag || (mediaRecorder && mediaRecorder.state !== "stopped")) { // Ensure response if action was taken
+                sendResponse({ success: true, stopped: true });
             }
           });
         });
@@ -167,11 +179,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           audioChunks = [];
           processStopAndRespond();
         }
-      } else { // No active media recorder, or it was already stopped
+      } else {
         if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); audioStream = null; }
         mediaRecorder = null;
         if (audioChunks.length > 0 && !recordedAudioBlob) recordedAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        else if (!recordedAudioBlob) recordedAudioBlob = null; // ensure it's null if no data
+        else if (!recordedAudioBlob) recordedAudioBlob = null;
         audioChunks = [];
         processStopAndRespond();
       }
@@ -202,16 +214,10 @@ chrome.runtime.onInstalled.addListener(() => {
   updateActionIcon(false);
 });
 
-// Initial state check on load
 chrome.storage.local.get('isRecording', (result) => {
-    isActuallyRecording = !!result.isRecording; // If browser crashed, this might be true
+    isActuallyRecording = !!result.isRecording;
     updateActionIcon(isActuallyRecording);
     if (isActuallyRecording) {
-        console.warn("Background: Extension loaded, was previously recording. State reset. User may need to restart recording.");
-        // Decide if you want to force isActuallyRecording to false here.
-        // Forcing it to false might be safer to avoid inconsistent states.
-        // isActuallyRecording = false;
-        // chrome.storage.local.set({ isRecording: false });
-        // updateActionIcon(false);
+        console.warn("Background: Extension loaded, was previously recording. State has been updated based on storage. User might need to manually stop if this was unintended.");
     }
 });
