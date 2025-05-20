@@ -23,32 +23,83 @@
       padding: 5px;
       text-align: center;
     }
+    .page-preview {
+      position: relative; /* For absolute positioning of canvas */
+    }
     .page-preview img {
       max-width: 100%;
       height: auto;
+      display: block; /* Ensures image is block for centering and spacing */
+      margin-bottom: 5px;
+    }
+    .page-preview canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      /* cursor: crosshair; will be set by JS when drawingEnabled */
+    }
+    .page-preview textarea.annotation-input {
+      width: calc(100% - 12px); /* Account for padding */
+      padding: 5px;
+      margin-bottom: 5px;
+      border: 1px solid #ddd;
+      box-sizing: border-box; /* Include padding and border in the element's total width and height */
+      min-height: 40px; /* Minimum height for textarea */
+    }
+    .page-preview button.delete-btn {
+      background-color: #ff4d4d;
+      color: white;
+      border: none;
+      padding: 5px 10px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .page-preview button.delete-btn:hover {
+      background-color: #cc0000;
+    }
+    .page-preview.deleted {
+      opacity: 0.5;
+    }
+    .page-preview.deleted img,
+    .page-preview.deleted textarea.annotation-input,
+    .page-preview.deleted button.delete-btn {
+      pointer-events: none; /* Disable interactions with deleted items */
     }
     #status {
       margin: 10px 0;
       font-weight: bold;
     }
-    .annotation-input {
-      width: 100%;
-      margin-top: 5px;
-      padding: 5px;
-      font-size: 14px;
+    /* .annotation-input class is now more specific: .page-preview textarea.annotation-input */
+    #editControls button.active {
+      background-color: #007bff;
+      color: white;
     }
   </style>
 </head>
 <body>
   <div id="recordingSection">
     <div id="status">Recording stopped.</div>
+    <div>
+      <input type="checkbox" id="recordAudioCheckbox" style="margin-right: 5px;">
+      <label for="recordAudioCheckbox">Record Audio</label>
+    </div>
+    <br> 
     <button id="startRecording">Start Recording</button>
     <button id="stopRecording" disabled>Stop Recording</button>
   </div>
   <div id="editSection">
     <h3>Edit PDF</h3>
+    <div id="editControls" style="padding: 10px; border-bottom: 1px solid #ccc; margin-bottom: 10px;">
+      <button id="enableDrawingMode">Enable Drawing</button>
+      <button id="toolHighlighter" disabled>Highlight (Rect)</button>
+      <button id="toolCircle" disabled>Circle</button>
+      <button id="toolCrop" disabled>Crop</button>
+      <!-- clearPageDrawings will be per-preview -->
+    </div>
     <div id="pagePreviews"></div>
     <button id="savePDF">Save PDF</button>
+    <button id="downloadAudioButton" style="display:none; background-color: #28a745; margin-top:10px;">Download Audio</button>
   </div>
   <script src="lib/jspdf.umd.min.js"></script>
   <script src="popup.js"></script>
