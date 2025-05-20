@@ -1,66 +1,118 @@
 // At the top of popup.js
-let currentScreenshots = []; // To store screenshots for editing
-let drawingEnabled = false; // Master switch for drawing mode
-let currentDrawingTool = 'none'; // 'highlighter', 'circle', or 'crop'
+let currentScreenshots = [];
+let drawingEnabled = false;
+let currentDrawingTool = 'none';
 let isDrawing = false;
 let startX, startY;
-let activeCanvas = null; // Reference to the canvas currently being drawn on
-let activeScreenshotIndex = -1; // Index of the screenshot for the activeCanvas
+let activeCanvas = null;
+let activeScreenshotIndex = -1;
+
+// UI Sections
+const initialSection = document.getElementById('initialSection');
+const recordingSection = document.getElementById('recordingSection');
+const editSection = document.getElementById('editSection');
+const statusDiv = document.getElementById('status'); // Shared status div, or specific ones if needed.
+
+// Initial UI state: Show "Let's Record"
+initialSection.style.display = 'block';
+recordingSection.style.display = 'none';
+editSection.style.display = 'none';
 
 
-// Check recording state when the popup loads
-chrome.storage.local.get(['isRecording'], (result) => {
-  const isRecording = result.isRecording || false;
-  updateUI(isRecording);
+// "Let's Record" button
+document.getElementById('showRecordButtons').addEventListener('click', () => {
+  initialSection.style.display = 'none';
+  recordingSection.style.display = 'block';
+  statusDiv.textContent = 'Click Start Recording on the page.'; // Update status for recording section
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs && tabs.length > 0 && tabs[0].id) {
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'showOverlayButtons' }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.log('Failed to send showOverlayButtons to content script:', chrome.runtime.lastError.message);
+        }
+      });
+    }
+  });
+  // Check recording state from background to correctly set button states in recordingSection
+  chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
+    if (response && response.isRecording !== undefined) {
+      updateUIRecordingSection(response.isRecording);
+    }
+  });
 });
 
-// Update the UI based on the recording state
-function updateUI(isRecording) {
-  document.getElementById('startRecording').disabled = isRecording;
-  document.getElementById('stopRecording').disabled = !isRecording;
-  if (isRecording) {
-    document.getElementById('status').textContent = 'Recording...';
-  } else {
-    document.getElementById('status').textContent = 'Recording stopped.';
+
+// Function to update buttons in the recording section
+function updateUIRecordingSection(isRec) {
+  document.getElementById('startRecording').disabled = isRec;
+  document.getElementById('stopRecording').disabled = !isRec;
+  const recStatusDiv = recordingSection.querySelector('#status'); // Assuming status div is inside recordingSection now
+  if (recStatusDiv) {
+    recStatusDiv.textContent = isRec ? 'Recording...' : 'Recording stopped.';
   }
 }
 
-// Start Recording button
+// Start Recording button (in popup, delegates to content script's overlay button)
 document.getElementById('startRecording').addEventListener('click', () => {
   const shouldRecordAudio = document.getElementById('recordAudioCheckbox').checked;
-  chrome.runtime.sendMessage({ action: 'startRecording', recordAudio: shouldRecordAudio }, (response) => {
-    if (chrome.runtime.lastError) {
-      console.error("Error starting recording:", chrome.runtime.lastError.message);
-      // Optionally, update UI to reflect error
-      return;
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs && tabs.length > 0 && tabs[0].id) {
+      // Instruct content script to "click" its start button
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'triggerStartRecording', recordAudio: shouldRecordAudio });
     }
-    if (response && response.success) {
-      updateUI(true);
+  });
+  updateUIRecordingSection(true); // Optimistically update UI
+});
+
+// Stop Recording button (in popup, delegates to content script's overlay button)
+document.getElementById('stopRecording').addEventListener('click', () => {
+   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs && tabs.length > 0 && tabs[0].id) {
+      // Instruct content script to "click" its stop button
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'triggerStopRecording' });
+    }
+  });
+  updateUIRecordingSection(false); // Optimistically update UI
+  // The actual handling of screenshots will be done when 'showEditInterfaceMessage' is received
+});
+
+
+// Listen for messages from background script (e.g., when recording actually stops)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'showEditInterfaceMessage') {
+    console.log("Received screenshots for editing:", message.data.screenshots);
+    if (message.data.audioAvailable) {
+        document.getElementById('downloadAudioButton').style.display = 'block';
+    } else {
+        document.getElementById('downloadAudioButton').style.display = 'none';
+    }
+    showEditInterface(message.data.screenshots ? message.data.screenshots.map(s => ({...s})) : []);
+    recordingSection.style.display = 'none'; // Hide recording section
+    editSection.style.display = 'block';    // Show edit section
+  } else if (message.action === 'recordingActuallyStarted') {
+    updateUIRecordingSection(true);
+  } else if (message.action === 'recordingActuallyStopped') {
+    updateUIRecordingSection(false);
+     // This message might also carry screenshot data if preferred over separate message
+  }
+});
+
+
+// Back to Record Button
+document.getElementById('backToRecord').addEventListener('click', () => {
+  editSection.style.display = 'none';
+  initialSection.style.display = 'block'; // Go back to the initial "Let's Record" screen
+  statusDiv.textContent = 'Ready to record!';
+  currentScreenshots = []; // Clear screenshots
+  document.getElementById('pagePreviews').innerHTML = '';
+  // Optionally, tell content script to hide overlay buttons if they are visible
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs && tabs.length > 0 && tabs[0].id) {
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'hideOverlayButtons' });
     }
   });
 });
 
-// Stop Recording button
-document.getElementById('stopRecording').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: 'stopRecording' }, (response) => {
-    if (chrome.runtime.lastError) {
-      console.error("Error stopping recording:", chrome.runtime.lastError.message);
-      // Optionally, update UI to reflect error
-      return;
-    }
-    if (response) { // response will be { screenshots, audioAvailable }
-      updateUI(false);
-      if (response.audioAvailable) {
-        document.getElementById('downloadAudioButton').style.display = 'block';
-      } else {
-        document.getElementById('downloadAudioButton').style.display = 'none';
-      }
-      // Ensure screenshots are cloned if they are directly from a message response
-      // to avoid issues if the original object is modified elsewhere or is read-only.
-      showEditInterface(response.screenshots ? response.screenshots.map(s => ({...s})) : []);
-    }
-  });
-});
 
 // Save PDF button
 document.getElementById('savePDF').addEventListener('click', () => {
@@ -68,7 +120,6 @@ document.getElementById('savePDF').addEventListener('click', () => {
   currentScreenshots.forEach((screenshot, originalIndex) => {
     const previewDiv = document.querySelector(`.page-preview[data-index="${originalIndex}"]`);
     if (previewDiv && !previewDiv.classList.contains('deleted')) {
-      // Annotation is already up-to-date in currentScreenshots via oninput
       filteredScreenshots.push(screenshot);
     }
   });
@@ -76,35 +127,36 @@ document.getElementById('savePDF').addEventListener('click', () => {
   if (filteredScreenshots.length > 0) {
     generatePDF(filteredScreenshots);
   } else {
-    // Handle case with no pages to save, maybe show a message
     console.log("No pages to save.");
-    // Optionally, switch back to recording section or show a message in UI
-    document.getElementById('recordingSection').style.display = 'block';
-    document.getElementById('editSection').style.display = 'none';
-    document.getElementById('status').textContent = 'No pages selected for PDF.';
+    alert("No pages to save. Please ensure some pages are not marked as deleted.");
+    // Stay in edit section for user to make changes or go back
   }
 });
 
 // Show the editing interface
 function showEditInterface(screenshotsData) {
   currentScreenshots = screenshotsData.map((s, index) => ({
-    ...s, // spread existing properties like dataUrl, clickX, clickY
-    annotation: s.annotation || '', // Ensure annotation property exists
-    drawings: s.drawings || [], // Initialize drawings array
-    cropRegion: s.cropRegion || null, // Initialize cropRegion
-    originalIndex: index // Keep track of original index if needed, though data-index serves this
+    ...s,
+    annotation: s.annotation || '',
+    drawings: s.drawings || [],
+    cropRegion: s.cropRegion || null,
+    originalIndex: index
   }));
 
-  document.getElementById('recordingSection').style.display = 'none';
-  document.getElementById('editSection').style.display = 'block';
-  // Reset drawing mode when showing edit interface
+  initialSection.style.display = 'none';
+  recordingSection.style.display = 'none';
+  editSection.style.display = 'block';
   drawingEnabled = false;
   currentDrawingTool = 'none';
   updateDrawingToolButtons();
 
-
   const pagePreviews = document.getElementById('pagePreviews');
-  pagePreviews.innerHTML = ''; // Clear existing previews
+  pagePreviews.innerHTML = '';
+
+  if (currentScreenshots.length === 0) {
+    pagePreviews.innerHTML = '<p>No screenshots were captured.</p>';
+    return;
+  }
 
   currentScreenshots.forEach((screenshot, originalIndex) => {
     const pagePreviewDiv = document.createElement('div');
@@ -115,44 +167,36 @@ function showEditInterface(screenshotsData) {
     imgElement.src = screenshot.dataUrl;
 
     const canvas = document.createElement('canvas');
-    // Style canvas for absolute positioning
     canvas.style.position = 'absolute';
     canvas.style.top = '0';
     canvas.style.left = '0';
-    // canvas.style.cursor will be set by drawingEnabled state change
 
     pagePreviewDiv.appendChild(imgElement);
-    pagePreviewDiv.appendChild(canvas); // Add canvas to DOM
+    pagePreviewDiv.appendChild(canvas);
 
     imgElement.onload = () => {
-      canvas.width = imgElement.clientWidth;
+      canvas.width = imgElement.clientWidth; // Ensure canvas matches displayed image size
       canvas.height = imgElement.clientHeight;
-      // Store canvas and context with the previewDiv for easy access if needed
       pagePreviewDiv.canvas = canvas;
 
-      // Store preview dimensions on the screenshot object
       const ssObject = currentScreenshots.find(s => s.originalIndex === originalIndex);
       if (ssObject) {
           ssObject.previewWidth = imgElement.clientWidth;
           ssObject.previewHeight = imgElement.clientHeight;
       }
       
-      // Redraw existing drawings and crop
-      if (screenshot.drawings || screenshot.cropRegion) {
-          redrawCanvas(canvas, screenshot.drawings, screenshot.cropRegion);
-      }
+      redrawCanvas(canvas, screenshot.drawings, screenshot.cropRegion);
     };
     
-    // Canvas Event Listeners
+    // Canvas Event Listeners (Copied from your existing code, ensure it's correct)
     canvas.addEventListener('mousedown', (event) => {
       if (!drawingEnabled || currentDrawingTool === 'none') return;
       activeCanvas = canvas;
-      activeScreenshotIndex = originalIndex;
+      activeScreenshotIndex = originalIndex; // Use originalIndex
       isDrawing = true;
       const rect = canvas.getBoundingClientRect();
       startX = event.clientX - rect.left;
       startY = event.clientY - rect.top;
-      // Prevent default action if drawing, e.g., text selection
       event.preventDefault(); 
     });
 
@@ -162,25 +206,24 @@ function showEditInterface(screenshotsData) {
       const rect = activeCanvas.getBoundingClientRect();
       const currentX = event.clientX - rect.left;
       const currentY = event.clientY - rect.top;
+      // Temp drawing logic from your code
+      const tempDrawings = [...currentScreenshots[activeScreenshotIndex].drawings]; // Operate on a copy for temp
+      let tempCrop = currentScreenshots[activeScreenshotIndex].cropRegion;
 
       if (currentDrawingTool === 'crop') {
-        const currentDrawings = currentScreenshots[activeScreenshotIndex].drawings;
-        const currentCrop = currentScreenshots[activeScreenshotIndex].cropRegion; // This will be null while defining a new crop
-        redrawCanvas(activeCanvas, currentDrawings, currentCrop, true); // Pass true for isTemporaryDrawing
-        const tempCropRect = { 
+        redrawCanvas(activeCanvas, tempDrawings, null, true); // Draw existing, no current crop, indicate temp
+        tempCrop = { 
             x: Math.min(startX, currentX), 
             y: Math.min(startY, currentY), 
             width: Math.abs(currentX - startX), 
             height: Math.abs(currentY - startY) 
         };
-        drawTemporaryCropVisual(activeCanvas.getContext('2d'), tempCropRect);
-      } else { // highlighter or circle
+        drawTemporaryCropVisual(activeCanvas.getContext('2d'), tempCrop);
+      } else {
+        redrawCanvas(activeCanvas, tempDrawings, tempCrop); // Redraw existing state
         const ctx = activeCanvas.getContext('2d');
-        // Redraw existing drawings and crop (if any) before drawing temporary shape
-        redrawCanvas(activeCanvas, currentScreenshots[activeScreenshotIndex].drawings, currentScreenshots[activeScreenshotIndex].cropRegion);
-        
         if (currentDrawingTool === 'highlighter') {
-            ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.3)'; // Temp highlight color
             ctx.fillRect(startX, startY, currentX - startX, currentY - startY);
         } else if (currentDrawingTool === 'circle') {
             const dX = currentX - startX;
@@ -189,7 +232,7 @@ function showEditInterface(screenshotsData) {
             const centerX = startX + dX/2;
             const centerY = startY + dY/2;
             
-            ctx.strokeStyle = 'rgba(255, 0, 0, 0.7)';
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.7)'; // Temp circle color
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
@@ -212,10 +255,10 @@ function showEditInterface(screenshotsData) {
             width: Math.abs(endX - startX), 
             height: Math.abs(endY - startY) 
         };
-        if (finalCropRect.width > 0 && finalCropRect.height > 0) {
+        if (finalCropRect.width > 5 && finalCropRect.height > 5) { // Minimum crop size
             currentScreenshots[activeScreenshotIndex].cropRegion = finalCropRect;
         } else {
-            currentScreenshots[activeScreenshotIndex].cropRegion = null; // Or keep existing if any
+             // Do nothing or reset to null if desired, current logic keeps existing or null
         }
       } else if (currentDrawingTool === 'highlighter') {
         currentScreenshots[activeScreenshotIndex].drawings.push({ 
@@ -235,27 +278,25 @@ function showEditInterface(screenshotsData) {
         });
       }
       
-      isDrawing = false; // Reset isDrawing before redraw for final state
+      isDrawing = false; 
       redrawCanvas(activeCanvas, currentScreenshots[activeScreenshotIndex].drawings, currentScreenshots[activeScreenshotIndex].cropRegion);
       activeCanvas = null;
       activeScreenshotIndex = -1;
     });
     
-    canvas.addEventListener('mouseleave', (event) => {
+    canvas.addEventListener('mouseleave', (event) => { // Similar to mouseup for finishing drawing
         if (isDrawing && activeCanvas === canvas) {
             const rect = activeCanvas.getBoundingClientRect();
-            const endX = event.clientX - rect.left;
+            const endX = event.clientX - rect.left; // Use clientX/Y for consistency
             const endY = event.clientY - rect.top;
 
-            if (currentDrawingTool === 'crop') {
+             if (currentDrawingTool === 'crop') {
                 const finalCropRect = { 
                     x: Math.min(startX, endX), y: Math.min(startY, endY), 
                     width: Math.abs(endX - startX), height: Math.abs(endY - startY) 
                 };
-                if (finalCropRect.width > 0 && finalCropRect.height > 0) {
+                if (finalCropRect.width > 5 && finalCropRect.height > 5) {
                     currentScreenshots[activeScreenshotIndex].cropRegion = finalCropRect;
-                } else {
-                    currentScreenshots[activeScreenshotIndex].cropRegion = null;
                 }
             } else if (currentDrawingTool === 'highlighter') {
                 currentScreenshots[activeScreenshotIndex].drawings.push({ 
@@ -275,55 +316,47 @@ function showEditInterface(screenshotsData) {
                 });
             }
             
-            isDrawing = false; // Reset before redraw
+            isDrawing = false;
             redrawCanvas(activeCanvas, currentScreenshots[activeScreenshotIndex].drawings, currentScreenshots[activeScreenshotIndex].cropRegion);
             activeCanvas = null;
             activeScreenshotIndex = -1;
         }
     });
 
-
     const annotationInput = document.createElement('textarea');
     annotationInput.className = 'annotation-input';
-    annotationInput.value = screenshot.annotation; // Pre-fill
+    annotationInput.value = screenshot.annotation;
     annotationInput.placeholder = "Add annotation...";
     annotationInput.oninput = () => {
       currentScreenshots[originalIndex].annotation = annotationInput.value;
     };
 
+    const controlsDiv = document.createElement('div');
+    controlsDiv.className = 'preview-controls';
+
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'delete-btn';
     deleteBtn.textContent = 'Delete Page';
     deleteBtn.onclick = () => {
-      pagePreviewDiv.classList.add('deleted');
+      pagePreviewDiv.classList.toggle('deleted'); // Toggle deleted state
+       // Update button text based on state
+      deleteBtn.textContent = pagePreviewDiv.classList.contains('deleted') ? 'Undo Delete' : 'Delete Page';
+      deleteBtn.style.backgroundColor = pagePreviewDiv.classList.contains('deleted') ? '#28a745' : '#ff4d4d'; // Green for undo, red for delete
     };
 
     const clearDrawingsBtn = document.createElement('button');
+    clearDrawingsBtn.className = 'clear-btn'; // Use general clear style
     clearDrawingsBtn.textContent = 'Clear Drawings';
-    clearDrawingsBtn.style.fontSize = '12px'; // Match delete button
-    clearDrawingsBtn.style.backgroundColor = '#6c757d';
-    clearDrawingsBtn.style.color = 'white';
-    clearDrawingsBtn.style.border = 'none';
-    clearDrawingsBtn.style.padding = '5px 10px';
-    clearDrawingsBtn.style.borderRadius = '3px';
-    clearDrawingsBtn.style.cursor = 'pointer';
-    clearDrawingsBtn.style.marginTop = '5px';
-
-
     clearDrawingsBtn.onclick = () => {
       if(currentScreenshots[originalIndex]){
         currentScreenshots[originalIndex].drawings = [];
-        redrawCanvas(canvas, [], currentScreenshots[originalIndex].cropRegion); // Pass cropRegion
+        redrawCanvas(canvas, [], currentScreenshots[originalIndex].cropRegion);
       }
     };
 
     const clearCropBtn = document.createElement('button');
+    clearCropBtn.className = 'clear-btn';
     clearCropBtn.textContent = 'Clear Crop';
-    clearCropBtn.style.cssText = clearDrawingsBtn.style.cssText; // Reuse style
-    clearCropBtn.style.backgroundColor = '#ffc107'; // A different color for clear crop
-    clearCropBtn.style.color = 'black';
-
-
     clearCropBtn.onclick = () => {
       if(currentScreenshots[originalIndex]){
         currentScreenshots[originalIndex].cropRegion = null;
@@ -331,57 +364,46 @@ function showEditInterface(screenshotsData) {
       }
     };
 
+    controlsDiv.appendChild(deleteBtn);
+    controlsDiv.appendChild(clearDrawingsBtn); 
+    controlsDiv.appendChild(clearCropBtn);
+
     pagePreviewDiv.appendChild(annotationInput);
-    pagePreviewDiv.appendChild(deleteBtn);
-    pagePreviewDiv.appendChild(clearDrawingsBtn); 
-    pagePreviewDiv.appendChild(clearCropBtn); // Add new button
+    pagePreviewDiv.appendChild(controlsDiv); // Add controls div
     pagePreviews.appendChild(pagePreviewDiv);
   });
 }
 
-// RedrawCanvas Function
+// RedrawCanvas Function - Ensure it handles cropRegion correctly
 function redrawCanvas(canvas, drawings, cropRegion, isTemporaryDrawing = false) {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  const imgElement = canvas.parentElement.querySelector('img');
-  if (!imgElement) {
-    console.error("Image element not found for canvas", canvas);
-    return;
-  }
+  // No need to redraw image on canvas if it's an <img> tag behind it.
+  // If using canvas to display the image itself, you would drawImage here.
 
-  // If a crop region is defined and we are not in a temporary drawing state (like defining the crop)
-  if (cropRegion && !isTemporaryDrawing) {
-    ctx.save();
-    // Draw the original image first, then apply effects around/for the crop
-    // This ensures the crop region is part of the original image content
-    // ctx.drawImage(imgElement, 0, 0, canvas.width, canvas.height); // Not needed if img is behind canvas
-
-    // Fill the entire canvas with a semi-transparent overlay
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Clear the crop region to show the image underneath
-    ctx.clearRect(cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height);
-    
-    // Optional: Draw a border around the crop region
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height);
-    
-    ctx.restore(); // Resets fillStyle, strokeStyle, lineWidth
-  } else if (cropRegion && isTemporaryDrawing) {
-    // When isTemporaryDrawing is true (meaning we are actively drawing a crop rectangle),
-    // we want the underlying image to be fully visible, and the temporary crop visual
-    // will be drawn by drawTemporaryCropVisual. So, do nothing here to obscure image.
-  } else {
-    // No crop region, or it's a temporary drawing of something else (not crop)
-    // The canvas is clear, image behind shows through.
+  if (cropRegion) {
+    if (!isTemporaryDrawing) { // Final crop view
+      ctx.save();
+      // Darken area outside crop
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Clear the crop region itself
+      ctx.clearRect(cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height);
+      // Optional: Draw a border for the crop region
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'; // White border for visibility
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height);
+      ctx.restore();
+    } else {
+      // During temporary drawing (e.g. dragging the crop box),
+      // drawTemporaryCropVisual will handle the visual feedback.
+    }
   }
 
   // Draw existing drawings (highlights, circles)
-  // These should be drawn on top of the crop effect.
   (drawings || []).forEach(drawing => {
+    ctx.save(); // Save context state before drawing each shape
     if (drawing.type === 'rect') {
       ctx.fillStyle = drawing.color;
       ctx.fillRect(drawing.x, drawing.y, drawing.width, drawing.height);
@@ -392,6 +414,7 @@ function redrawCanvas(canvas, drawings, cropRegion, isTemporaryDrawing = false) 
       ctx.arc(drawing.cx, drawing.cy, drawing.radius, 0, 2 * Math.PI);
       ctx.stroke();
     }
+    ctx.restore(); // Restore context state
   });
 }
 
@@ -402,24 +425,12 @@ function drawTemporaryCropVisual(ctx, tempRect) {
   ctx.lineWidth = 2;
   ctx.setLineDash([5, 5]);
   ctx.strokeRect(tempRect.x, tempRect.y, tempRect.width, tempRect.height);
-  ctx.setLineDash([]); // Reset line dash
+  ctx.setLineDash([]);
   ctx.restore();
 }
 
 
-// Helper function to get image dimensions
-function getImageDimensions(dataUrl) {
-  return new Promise(resolve => {
-    const img = new Image();
-    img.onload = () => {
-      resolve({ width: img.width, height: img.height });
-    };
-    img.src = dataUrl;
-  });
-}
-
 async function generatePDF(screenshotsToProcess) {
-  // Ensure jsPDF is loaded (this check is already here, just for context)
   if (!window.jspdf || !window.jspdf.jsPDF) {
     console.error("jsPDF library is not loaded.");
     alert("Error: jsPDF library is not loaded. Cannot generate PDF.");
@@ -430,123 +441,156 @@ async function generatePDF(screenshotsToProcess) {
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
   const margin = 10;
   const pageWidth = pdf.internal.pageSize.getWidth();
-  const pageHeightInPdf = pdf.internal.pageSize.getHeight(); // Renamed for clarity from availableHeight
+  const pageHeightInPdf = pdf.internal.pageSize.getHeight();
   const contentWidth = pageWidth - 2 * margin;
-  // const contentHeight = pageHeightInPdf - 2 * margin; // Less critical for image height, more for text
 
   try {
     for (let i = 0; i < screenshotsToProcess.length; i++) {
       const screenshot = screenshotsToProcess[i];
-      let currentY = margin; // Reset Y for each page's content starting point
+      if (i > 0) {
+        pdf.addPage();
+      }
+      let currentY = margin;
 
-      // A. Load Original Image & Get Dimensions
       const originalImage = new Image();
       originalImage.src = screenshot.dataUrl;
       try {
           await new Promise((resolve, reject) => {
               originalImage.onload = resolve;
-              originalImage.onerror = (err) => {
-                console.error("Image load error object:", err);
-                reject(new Error("Failed to load image for PDF processing."));
+              originalImage.onerror = (errEvent) => {
+                  // errEvent is an Event, not an Error object. For more detail, one might need to
+                  // wrap this in a try-catch if the error could be thrown before onerror.
+                  console.error("Image load error event for screenshot " + i + ":", errEvent);
+                  reject(new Error(`Failed to load image for PDF processing (index ${i}). Source: ${originalImage.src.substring(0,100)}...`));
               };
           });
       } catch (error) {
-          console.error("Error loading original image for PDF for screenshot index " + i + ":", error.message);
-          if (i > 0) pdf.addPage(); // Ensure new page for error message if not first page
-          pdf.text("Error loading image.", margin, currentY);
+          console.error(error.message);
+          pdf.text(`Error loading image for page ${i + 1}.`, margin, currentY);
           currentY += 10; 
-          continue; // Skip to next screenshot
+          continue; 
       }
+      
       const originalWidth = originalImage.naturalWidth;
       const originalHeight = originalImage.naturalHeight;
 
-      // B. Prepare Source Canvas (Off-screen Canvas)
       const sourceCanvas = document.createElement('canvas');
       const sourceCtx = sourceCanvas.getContext('2d');
       
-      let sX = 0, sY = 0, sWidth = originalWidth, sHeight = originalHeight; // Source region from original image
-      let dX = 0, dY = 0, dWidth = originalWidth, dHeight = originalHeight; // Destination region on sourceCanvas
+      let sX = 0, sY = 0, sWidth = originalWidth, sHeight = originalHeight;
+      let dX = 0, dY = 0, dWidth = originalWidth, dHeight = originalHeight; // Destination on sourceCanvas
 
-      const previewWidth = screenshot.previewWidth || originalWidth;
+      const previewWidth = screenshot.previewWidth || originalWidth; // Fallback to original if preview not set
       const previewHeight = screenshot.previewHeight || originalHeight;
 
+
       if (screenshot.cropRegion && screenshot.cropRegion.width > 0 && screenshot.cropRegion.height > 0) {
+          // Scale crop region from preview dimensions to original image dimensions
           sX = screenshot.cropRegion.x * (originalWidth / previewWidth);
           sY = screenshot.cropRegion.y * (originalHeight / previewHeight);
           sWidth = screenshot.cropRegion.width * (originalWidth / previewWidth);
           sHeight = screenshot.cropRegion.height * (originalHeight / previewHeight);
 
+          // Ensure crop dimensions are within bounds of the original image
           sX = Math.max(0, Math.min(sX, originalWidth - 1));
           sY = Math.max(0, Math.min(sY, originalHeight - 1));
-          sWidth = Math.max(1, Math.min(sWidth, originalWidth - sX));
-          sHeight = Math.max(1, Math.min(sHeight, originalHeight - sY));
+          sWidth = Math.max(1, Math.min(sWidth, originalWidth - sX)); // Ensure width is at least 1
+          sHeight = Math.max(1, Math.min(sHeight, originalHeight - sY)); // Ensure height is at least 1
           
           sourceCanvas.width = sWidth;
           sourceCanvas.height = sHeight;
-          dWidth = sWidth;
+          // When drawing the cropped part to sourceCanvas, dX,dY are 0,0 and dWidth,dHeight are sWidth,sHeight
+          dWidth = sWidth; 
           dHeight = sHeight;
       } else {
           sourceCanvas.width = originalWidth;
           sourceCanvas.height = originalHeight;
       }
+      
       sourceCtx.drawImage(originalImage, sX, sY, sWidth, sHeight, dX, dY, dWidth, dHeight);
 
-      // C. Apply Drawings to sourceCanvas
       if (screenshot.drawings && screenshot.drawings.length > 0) {
-          const drawScaleX = sourceCanvas.width / previewWidth;
-          const drawScaleY = sourceCanvas.height / previewHeight;
+          // Adjust drawing coordinates based on the crop, if any.
+          // And scale from preview dimensions to sourceCanvas dimensions (which might be cropped size or original size)
+          const scaleXToSourceCanvas = sourceCanvas.width / (screenshot.cropRegion ? screenshot.cropRegion.width : previewWidth);
+          const scaleYToSourceCanvas = sourceCanvas.height / (screenshot.cropRegion ? screenshot.cropRegion.height : previewHeight);
+          const offsetX = screenshot.cropRegion ? -screenshot.cropRegion.x * scaleXToSourceCanvas : 0;
+          const offsetY = screenshot.cropRegion ? -screenshot.cropRegion.y * scaleYToSourceCanvas : 0;
+
+
           screenshot.drawings.forEach(drawing => {
-              if (drawing.type === 'rect') {
-                  sourceCtx.fillStyle = drawing.color;
-                  sourceCtx.fillRect(drawing.x * drawScaleX, drawing.y * drawScaleY, drawing.width * drawScaleX, drawing.height * drawScaleY);
-              } else if (drawing.type === 'circle') {
-                  sourceCtx.strokeStyle = drawing.color;
-                  sourceCtx.lineWidth = (drawing.strokeWidth || 2) * Math.min(drawScaleX, drawScaleY);
-                  sourceCtx.beginPath();
-                  sourceCtx.arc(drawing.cx * drawScaleX, drawing.cy * drawScaleY, drawing.radius * Math.min(drawScaleX, drawScaleY), 0, 2 * Math.PI);
-                  sourceCtx.stroke();
-              }
+            sourceCtx.save();
+            // Apply transformations to draw relative to the sourceCanvas content
+            // The drawing coordinates are relative to the preview.
+            // If cropped, they need to be translated as if the cropRegion's top-left is (0,0)
+            // and then scaled to the sourceCanvas's (potentially cropped) dimensions.
+
+            let drawingX = drawing.x;
+            let drawingY = drawing.y;
+            let drawingWidth = drawing.width;
+            let drawingHeight = drawing.height;
+            let drawingCx = drawing.cx;
+            let drawingCy = drawing.cy;
+            let drawingRadius = drawing.radius;
+
+
+            if(screenshot.cropRegion){
+                // Adjust coordinates to be relative to the crop region's top-left
+                drawingX -= screenshot.cropRegion.x;
+                drawingY -= screenshot.cropRegion.y;
+                drawingCx -= screenshot.cropRegion.x;
+                drawingCy -= screenshot.cropRegion.y;
+                // Note: width, height, radius are scaled, not translated further by crop offset
+            }
+
+
+            if (drawing.type === 'rect') {
+                sourceCtx.fillStyle = drawing.color;
+                sourceCtx.fillRect(
+                    drawingX * scaleXToSourceCanvas, 
+                    drawingY * scaleYToSourceCanvas, 
+                    drawingWidth * scaleXToSourceCanvas, 
+                    drawingHeight * scaleYToSourceCanvas
+                );
+            } else if (drawing.type === 'circle') {
+                sourceCtx.strokeStyle = drawing.color;
+                sourceCtx.lineWidth = (drawing.strokeWidth || 2) * Math.min(scaleXToSourceCanvas, scaleYToSourceCanvas);
+                sourceCtx.beginPath();
+                sourceCtx.arc(
+                    drawingCx * scaleXToSourceCanvas, 
+                    drawingCy * scaleYToSourceCanvas, 
+                    drawingRadius * Math.min(scaleXToSourceCanvas, scaleYToSourceCanvas), 
+                    0, 2 * Math.PI
+                );
+                sourceCtx.stroke();
+            }
+            sourceCtx.restore();
           });
       }
 
-      // D. Get dataURL from sourceCanvas
       const processedImageDataUrl = sourceCanvas.toDataURL('image/png');
-
-      // E. Add Image to PDF
-      if (i > 0) {
-        pdf.addPage();
-      }
       
       let imageWidthInPdf = contentWidth;
       let imageHeightInPdf = (sourceCanvas.height / sourceCanvas.width) * imageWidthInPdf;
-      const maxImageHeightInPdf = pageHeightInPdf * 0.75; // Max 75% of page height for image
+      const maxImageHeightInPdf = pageHeightInPdf * 0.70; // Max 70% for image to leave space for text
 
       if (imageHeightInPdf > maxImageHeightInPdf) {
           imageHeightInPdf = maxImageHeightInPdf;
           imageWidthInPdf = (sourceCanvas.width / sourceCanvas.height) * imageHeightInPdf;
       }
-      // Center image on PDF page if its width is less than contentWidth
-      let imageXPositionInPdf = margin;
-      if (imageWidthInPdf < contentWidth) {
-          imageXPositionInPdf = margin + (contentWidth - imageWidthInPdf) / 2;
-      }
+      let imageXPositionInPdf = margin + (contentWidth - imageWidthInPdf) / 2; // Center image
       
-      let imageYPositionInPdf = margin; // Reset Y for each new page's image
-      pdf.addImage(processedImageDataUrl, 'PNG', imageXPositionInPdf, imageYPositionInPdf, imageWidthInPdf, imageHeightInPdf);
-      currentY = imageYPositionInPdf + imageHeightInPdf + 5; // Update currentY for text annotations
+      pdf.addImage(processedImageDataUrl, 'PNG', imageXPositionInPdf, currentY, imageWidthInPdf, imageHeightInPdf);
+      currentY += imageHeightInPdf + 5;
 
-      // F. Add Text Annotations
       if (screenshot.annotation && screenshot.annotation.trim() !== "") {
         pdf.setFontSize(10);
         const textLines = pdf.splitTextToSize(screenshot.annotation, contentWidth);
+        const textBlockHeight = textLines.length * (pdf.getFontSize() * 0.352778 * 1.2); // mm approximation
         
-        const textHeight = textLines.length * (pdf.getFontSize() / pdf.internal.scaleFactor * 1.2); // Approximate height
-        if (currentY + textHeight > pageHeightInPdf - margin) {
-          // If text overflows, add a new page for the text
-          // This is a simplified overflow handling; might need refinement for very long texts
-          console.warn("Annotation for page", i+1, "may overflow and create a new page just for text.");
+        if (currentY + textBlockHeight > pageHeightInPdf - margin) {
           pdf.addPage();
-          currentY = margin; // Reset Y for new page
+          currentY = margin;
         }
         pdf.text(textLines, margin, currentY);
       }
@@ -557,17 +601,19 @@ async function generatePDF(screenshotsToProcess) {
     console.error("Error generating PDF:", error);
     alert("An error occurred while generating the PDF. Check console for details.");
   } finally {
-    // Reset UI regardless of success or failure
-    document.getElementById('recordingSection').style.display = 'block';
-    document.getElementById('editSection').style.display = 'none';
-    document.getElementById('downloadAudioButton').style.display = 'none'; // Hide audio button
-    updateUI(false); // Reset to initial state (buttons, status message)
-    currentScreenshots = []; // Clear screenshots
-    document.getElementById('pagePreviews').innerHTML = ''; // Clear previews
+    // Reset UI to initial state
+    initialSection.style.display = 'block';
+    recordingSection.style.display = 'none';
+    editSection.style.display = 'none';
+    document.getElementById('downloadAudioButton').style.display = 'none';
+    const mainStatusDiv = document.getElementById('initialSection').querySelector('#status') || statusDiv;
+    mainStatusDiv.textContent = 'Ready to record!';
+    currentScreenshots = [];
+    document.getElementById('pagePreviews').innerHTML = '';
   }
 }
 
-// Download Audio Button Event Listener
+// Download Audio Button
 document.getElementById('downloadAudioButton').addEventListener('click', () => {
   chrome.runtime.sendMessage({ action: 'getAudioBlob' }, (response) => {
     if (chrome.runtime.lastError) {
@@ -595,76 +641,65 @@ document.getElementById('downloadAudioButton').addEventListener('click', () => {
 document.getElementById('enableDrawingMode').addEventListener('click', () => {
   drawingEnabled = !drawingEnabled;
   updateDrawingToolButtons();
-  // Update cursor for all canvases
   const canvases = document.querySelectorAll('.page-preview canvas');
   canvases.forEach(c => c.style.cursor = drawingEnabled ? 'crosshair' : 'default');
 
   if (!drawingEnabled) {
-    currentDrawingTool = 'none'; // Reset tool if drawing is disabled
-    // Potentially clear activeCanvas selection if needed, though mouseup/leave should handle it
+    currentDrawingTool = 'none';
     isDrawing = false; 
     activeCanvas = null;
     activeScreenshotIndex = -1;
   }
-   // Update button text/state
   document.getElementById('enableDrawingMode').textContent = drawingEnabled ? 'Disable Drawing' : 'Enable Drawing';
   document.getElementById('enableDrawingMode').classList.toggle('active', drawingEnabled);
 });
 
 document.getElementById('toolHighlighter').addEventListener('click', () => {
   if (drawingEnabled) {
-    currentDrawingTool = 'highlighter';
-    updateActiveToolButton('toolHighlighter');
+    currentDrawingTool = (currentDrawingTool === 'highlighter' ? 'none' : 'highlighter');
+    updateActiveToolButton(currentDrawingTool === 'highlighter' ? 'toolHighlighter' : null);
   }
 });
 
 document.getElementById('toolCircle').addEventListener('click', () => {
   if (drawingEnabled) {
-    currentDrawingTool = 'circle';
-    updateActiveToolButton('toolCircle');
+    currentDrawingTool = (currentDrawingTool === 'circle' ? 'none' : 'circle');
+    updateActiveToolButton(currentDrawingTool === 'circle' ? 'toolCircle' : null);
   }
 });
 
 document.getElementById('toolCrop').addEventListener('click', () => {
   if (drawingEnabled) {
-    currentDrawingTool = 'crop';
-    updateActiveToolButton('toolCrop');
+    currentDrawingTool = (currentDrawingTool === 'crop' ? 'none' : 'crop');
+    updateActiveToolButton(currentDrawingTool === 'crop' ? 'toolCrop' : null);
   }
 });
-
 
 function updateDrawingToolButtons() {
   const highlighterBtn = document.getElementById('toolHighlighter');
   const circleBtn = document.getElementById('toolCircle');
   const cropBtn = document.getElementById('toolCrop');
 
-  highlighterBtn.disabled = !drawingEnabled;
-  circleBtn.disabled = !drawingEnabled;
-  cropBtn.disabled = !drawingEnabled;
-
-  if (!drawingEnabled) {
-    highlighterBtn.classList.remove('active');
-    circleBtn.classList.remove('active');
-    cropBtn.classList.remove('active');
-  } else {
-    // If drawing is enabled, reflect the currentDrawingTool
-    let activeId = null;
-    if (currentDrawingTool === 'highlighter') activeId = 'toolHighlighter';
-    else if (currentDrawingTool === 'circle') activeId = 'toolCircle';
-    else if (currentDrawingTool === 'crop') activeId = 'toolCrop';
-    updateActiveToolButton(activeId);
+  [highlighterBtn, circleBtn, cropBtn].forEach(btn => {
+    btn.disabled = !drawingEnabled;
+    if (!drawingEnabled) btn.classList.remove('active');
+  });
+  
+  if (drawingEnabled) {
+    updateActiveToolButton(currentDrawingTool !== 'none' ? `tool${currentDrawingTool.charAt(0).toUpperCase() + currentDrawingTool.slice(1)}` : null);
   }
 }
+
 
 function updateActiveToolButton(activeButtonId) {
-  document.getElementById('toolHighlighter').classList.remove('active');
-  document.getElementById('toolCircle').classList.remove('active');
-  document.getElementById('toolCrop').classList.remove('active');
-  if (activeButtonId) {
-    const btn = document.getElementById(activeButtonId);
-    if(btn) btn.classList.add('active');
-  }
+    ['toolHighlighter', 'toolCircle', 'toolCrop'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) { // Ensure button exists
+            if (id === activeButtonId) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        }
+    });
 }
-
-// Initialize tool buttons state on load (e.g. after edit section is shown)
-// This is implicitly handled by showEditInterface resetting drawingEnabled.
