@@ -43,11 +43,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 showEditInterface(data.screenshots ? data.screenshots.map(s => ({...s})) : []);
 
-                // Optionally clear the stored data after loading it,
-                // or keep it if the user might refresh the editor tab.
-                // chrome.storage.local.remove('editorData', () => {
-                //   console.log("Popup.js: Editor data cleared from storage.");
-                // });
             } else {
                 console.warn("Popup.js: Editor view specified, but no editorData found in storage.");
                 if (initialSection) initialSection.style.display = 'block';
@@ -69,11 +64,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             if (response) {
-                updateUIRecordingSection(response.isRecording);
+                // If already recording, directly show recording section (though controls are on page)
                 if (response.isRecording) {
                     if (initialSection) initialSection.style.display = 'none';
                     if (recordingSection) recordingSection.style.display = 'block';
-                    if (recordingStatusDiv) recordingStatusDiv.textContent = 'Recording...';
+                    if (recordingStatusDiv) recordingStatusDiv.textContent = 'Recording active. Use overlay to stop.';
                 }
             }
         });
@@ -85,81 +80,59 @@ document.addEventListener('DOMContentLoaded', () => {
 document.getElementById('showRecordButtons').addEventListener('click', () => {
   if (initialSection) initialSection.style.display = 'none';
   if (recordingSection) recordingSection.style.display = 'block';
-  if (recordingStatusDiv) recordingStatusDiv.textContent = 'Click Start Recording on the page or use overlay.';
+  if (recordingStatusDiv) recordingStatusDiv.textContent = "Click 'Start Record' on the page overlay (bottom right).";
+
+  const shouldRecordAudio = document.getElementById('recordAudioCheckbox').checked;
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs && tabs.length > 0 && tabs[0].id) {
+      // Send audio preference to content script, so it can use it when 'startRecording' is triggered from overlay
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'setAudioPreference', recordAudio: shouldRecordAudio });
       chrome.tabs.sendMessage(tabs[0].id, { action: 'showOverlayButtons' }, (response) => {
         if (chrome.runtime.lastError) {
           console.log('Popup.js: Failed to send showOverlayButtons to content script:', chrome.runtime.lastError.message);
+           if (recordingStatusDiv) recordingStatusDiv.textContent = "Error showing overlay. Try refreshing the page.";
+        } else {
+            // Optionally close the popup after instructing the user
+            // statusDiv.textContent = "Click 'Start Record' on the page overlay (bottom right).";
+            // setTimeout(() => window.close(), 2000); // Close popup after 2 seconds
         }
       });
     } else {
       console.error("Popup.js: Could not find active tab to show overlay buttons.");
+      if (recordingStatusDiv) recordingStatusDiv.textContent = "Error: No active tab found. Please ensure you are on a web page.";
     }
   });
 
-  chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
+  // Update UI based on current recording state (buttons are removed, but status is useful)
+   chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
     if (chrome.runtime.lastError) {
         console.warn("Popup.js: Error getting recording state for showRecordButtons:", chrome.runtime.lastError.message);
         return;
     }
     if (response && response.isRecording !== undefined) {
-      updateUIRecordingSection(response.isRecording);
+        if (recordingStatusDiv) {
+            recordingStatusDiv.textContent = response.isRecording ? 'Recording active. Use overlay to stop.' : "Click 'Start Record' on the page overlay (bottom right).";
+        }
     }
   });
 });
 
+// Back to Initial (from Recording Setup Section)
+document.getElementById('backToInitial').addEventListener('click', () => {
+    if (recordingSection) recordingSection.style.display = 'none';
+    if (initialSection) initialSection.style.display = 'block';
+    if (statusDiv) statusDiv.textContent = 'Ready to record!';
 
-function updateUIRecordingSection(isRec) {
-  const startBtn = document.getElementById('startRecording');
-  const stopBtn = document.getElementById('stopRecording');
-  if (startBtn) startBtn.disabled = isRec;
-  if (stopBtn) stopBtn.disabled = !isRec;
-  if (recordingStatusDiv) {
-    recordingStatusDiv.textContent = isRec ? 'Recording...' : 'Recording stopped.';
-  }
-}
-
-// Start Recording button (in popup, delegates to content script's overlay button)
-document.getElementById('startRecording').addEventListener('click', () => {
-  const shouldRecordAudio = document.getElementById('recordAudioCheckbox').checked;
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs && tabs.length > 0 && tabs[0].id) {
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'triggerStartRecording', recordAudio: shouldRecordAudio }, response => {
-        if (chrome.runtime.lastError) {
-            console.error("Popup.js: Error sending triggerStartRecording to content script:", chrome.runtime.lastError.message);
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs.length > 0 && tabs[0].id) {
+          chrome.tabs.sendMessage(tabs[0].id, { action: 'hideOverlayButtons' }, (response) => {
+            if (chrome.runtime.lastError) {
+              console.log('Popup.js: Failed to send hideOverlayButtons to content script:', chrome.runtime.lastError.message);
+            }
+          });
         }
       });
-    } else {
-      console.error("Popup.js: Could not find active tab to trigger start recording.");
-      if(recordingStatusDiv) recordingStatusDiv.textContent = "Error: No active tab found.";
-      updateUIRecordingSection(false); // Revert optimistic update
-      return;
-    }
-  });
-  updateUIRecordingSection(true); // Optimistically update UI in popup
-});
-
-// Stop Recording button (in popup, delegates to content script's overlay button)
-document.getElementById('stopRecording').addEventListener('click', () => {
-   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs && tabs.length > 0 && tabs[0].id) {
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'triggerStopRecording' }, response => {
-         if (chrome.runtime.lastError) {
-            console.error("Popup.js: Error sending triggerStopRecording to content script:", chrome.runtime.lastError.message);
-        }
-      });
-    } else {
-        console.error("Popup.js: Could not find active tab to trigger stop recording.");
-        if(recordingStatusDiv) recordingStatusDiv.textContent = "Error: No active tab found.";
-        updateUIRecordingSection(true); // Revert optimistic update
-        return;
-    }
-  });
-  updateUIRecordingSection(false); // Optimistically update UI in popup
-  // The actual handling of screenshots and transition to editor will be managed by background.js
-  // sending 'showEditInterfaceMessage'
 });
 
 
@@ -171,51 +144,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.set({ editorData: message.data }, () => {
       if (chrome.runtime.lastError) {
         console.error("Popup.js: Error setting editorData in local storage:", chrome.runtime.lastError.message);
-        alert("Error preparing editor. Please try again.");
+        // alert("Error preparing editor. Please try again."); // Avoid alert if popup might be closing
         sendResponse({success: false, error: "Storage error"});
         return;
       }
-      // Check if current view is already a tab. If so, just re-render. Otherwise, open new tab.
-      const urlParams = new URLSearchParams(window.location.search);
-      if (window.opener || urlParams.get('view') === 'editor' || (sender && sender.tab && sender.tab.id === chrome.tabs.TAB_ID_NONE)) {
-          // Already in a tab or this is the popup that should transition
-          // (sender.tab.id === chrome.tabs.TAB_ID_NONE for messages from background to popup action)
-          console.log("Popup.js: Refreshing editor view in current tab/popup window.");
-          const downloadAudioButton = document.getElementById('downloadAudioButton');
-          if (downloadAudioButton) {
-              downloadAudioButton.style.display = message.data.audioAvailable ? 'block' : 'none';
+      
+      // Open the editor in a new tab regardless of current context
+      console.log("Popup.js: Opening editor in a new tab.");
+      chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=editor&timestamp=' + Date.now()) });
+      
+      // If this is the popup action window, close it as the editor will open in a new tab.
+      // Check if it's the popup by seeing if it's not a tab (sender.tab will be undefined or its id will be TAB_ID_NONE for background)
+      // or if it's a window without an opener (typical for popups)
+      const amIPopup = !sender || !sender.tab || (sender.tab && sender.tab.id === chrome.tabs.TAB_ID_NONE && !window.opener) || (window.location.search.indexOf('view=editor') === -1) ;
+      
+      if (amIPopup) {
+          // Only close if it's the popup and not already an editor tab
+          if (window.location.search.indexOf('view=editor') === -1) {
+            console.log("Popup.js: Closing action popup as editor tab is opening.");
+            window.close();
           }
-          if (initialSection) initialSection.style.display = 'none';
-          if (recordingSection) recordingSection.style.display = 'none';
-          if (editSection) editSection.style.display = 'block';
-          showEditInterface(message.data.screenshots ? message.data.screenshots.map(s => ({...s})) : []);
-          
-      } else {
-          console.log("Popup.js: Opening editor in a new tab.");
-          chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=editor&timestamp=' + Date.now()) });
-          window.close(); // Close the current popup action window
       }
       sendResponse({success: true});
     });
     return true; // Async due to storage.set
 
   } else if (message.action === 'recordingActuallyStarted') {
-    updateUIRecordingSection(true);
+    if (recordingStatusDiv) recordingStatusDiv.textContent = 'Recording active. Use overlay to stop.';
     if (initialSection) initialSection.style.display = 'none';
     if (recordingSection) recordingSection.style.display = 'block';
-    if (recordingStatusDiv) recordingStatusDiv.textContent = 'Recording...';
     sendResponse({success: true});
   } else if (message.action === 'recordingActuallyStopped') {
-    updateUIRecordingSection(false);
-    if (recordingStatusDiv) recordingStatusDiv.textContent = 'Recording stopped.';
-    // The showEditInterfaceMessage will handle transitioning to editor
+    if (recordingStatusDiv) recordingStatusDiv.textContent = 'Recording stopped. Preparing editor...';
+    // The showEditInterfaceMessage will handle opening the editor tab.
     sendResponse({success: true});
   }
-  return true; // Keep true for async operations
+  return true;
 });
 
 
-// Back to Record Button
+// Back to Record Button (in Edit Section)
 document.getElementById('backToRecord').addEventListener('click', () => {
   if (editSection) editSection.style.display = 'none';
   if (initialSection) initialSection.style.display = 'block';
@@ -227,7 +195,6 @@ document.getElementById('backToRecord').addEventListener('click', () => {
   const downloadAudioButton = document.getElementById('downloadAudioButton');
   if(downloadAudioButton) downloadAudioButton.style.display = 'none';
 
-  // Tell content script to hide overlay buttons
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs && tabs.length > 0 && tabs[0].id) {
       chrome.tabs.sendMessage(tabs[0].id, { action: 'hideOverlayButtons' }, response => {
@@ -236,13 +203,14 @@ document.getElementById('backToRecord').addEventListener('click', () => {
     }
   });
 
-  // If this is a tab, and not the popup action, consider closing or navigating.
-  // For simplicity, just resetting the view.
+  // If this is an editor tab, close it.
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('view') === 'editor') {
-    // If it was an editor tab, perhaps navigate to a neutral state or allow closing.
-    // For now, it just resets to the initialSection view.
-    // To close the tab: chrome.tabs.getCurrent(tab => { chrome.tabs.remove(tab.id); });
+    chrome.tabs.getCurrent(tab => {
+        if (tab && tab.id) {
+            chrome.tabs.remove(tab.id);
+        }
+    });
   }
 });
 
@@ -250,7 +218,7 @@ document.getElementById('backToRecord').addEventListener('click', () => {
 // Save PDF button
 document.getElementById('savePDF').addEventListener('click', () => {
   const filteredScreenshots = [];
-  currentScreenshots.forEach((screenshot) => { // originalIndex is now part of screenshot object
+  currentScreenshots.forEach((screenshot) => { 
     const previewDiv = document.querySelector(`.page-preview[data-index="${screenshot.originalIndex}"]`);
     if (previewDiv && !previewDiv.classList.contains('deleted')) {
       filteredScreenshots.push(screenshot);
@@ -272,7 +240,7 @@ function showEditInterface(screenshotsData) {
     annotation: s.annotation || '',
     drawings: s.drawings || [],
     cropRegion: s.cropRegion || null,
-    originalIndex: s.originalIndex !== undefined ? s.originalIndex : index // Preserve originalIndex if it exists, else assign
+    originalIndex: s.originalIndex !== undefined ? s.originalIndex : index 
   }));
 
   if (initialSection) initialSection.style.display = 'none';
@@ -294,12 +262,12 @@ function showEditInterface(screenshotsData) {
     return;
   }
 
-  currentScreenshots.forEach((screenshot) => { // Iterate using screenshot object which contains originalIndex
-    const originalIndex = screenshot.originalIndex; // Use the originalIndex from the object
+  currentScreenshots.forEach((screenshot) => { 
+    const originalIndex = screenshot.originalIndex; 
 
     const pagePreviewDiv = document.createElement('div');
     pagePreviewDiv.className = 'page-preview';
-    pagePreviewDiv.dataset.index = originalIndex; // Use originalIndex for data-attribute
+    pagePreviewDiv.dataset.index = originalIndex; 
 
     const imgElement = document.createElement('img');
     imgElement.src = screenshot.dataUrl;
@@ -308,7 +276,7 @@ function showEditInterface(screenshotsData) {
     canvas.style.position = 'absolute';
     canvas.style.top = '0';
     canvas.style.left = '0';
-    canvas.style.pointerEvents = 'none'; // Initially, canvas does not intercept mouse events
+    canvas.style.pointerEvents = 'none'; 
 
     pagePreviewDiv.appendChild(imgElement);
     pagePreviewDiv.appendChild(canvas);
@@ -316,9 +284,8 @@ function showEditInterface(screenshotsData) {
     imgElement.onload = () => {
       canvas.width = imgElement.clientWidth;
       canvas.height = imgElement.clientHeight;
-      pagePreviewDiv.canvas = canvas; // Attach canvas to its div for easier access
+      pagePreviewDiv.canvas = canvas; 
 
-      // Update screenshot object with actual displayed dimensions
       const ssObject = currentScreenshots.find(s => s.originalIndex === originalIndex);
       if (ssObject) {
           ssObject.previewWidth = imgElement.clientWidth;
@@ -328,15 +295,12 @@ function showEditInterface(screenshotsData) {
       redrawCanvas(canvas, screenshot.drawings, screenshot.cropRegion);
     };
     
-    // Event Listeners for Drawing (Mouse events on the pagePreviewDiv, delegated to canvas logic)
     pagePreviewDiv.addEventListener('mousedown', (event) => {
       if (!drawingEnabled || currentDrawingTool === 'none') return;
-      // Only draw if the event target is the image itself (or canvas overlay if it could receive events)
-      // For simplicity, we assume mousedown on preview div means drawing on its image/canvas
-      activeCanvas = pagePreviewDiv.canvas; // Get the canvas associated with this preview
+      activeCanvas = pagePreviewDiv.canvas; 
       if (!activeCanvas) return;
 
-      activeCanvas.style.pointerEvents = 'auto'; // Enable pointer events on canvas for drawing
+      activeCanvas.style.pointerEvents = 'auto'; 
 
       activeScreenshotIndex = originalIndex;
       isDrawing = true;
@@ -360,7 +324,7 @@ function showEditInterface(screenshotsData) {
       let tempCrop = ssObject.cropRegion;
 
       if (currentDrawingTool === 'crop') {
-        redrawCanvas(activeCanvas, tempDrawings, null, true); // Draw existing, no current crop, indicate temp
+        redrawCanvas(activeCanvas, tempDrawings, null, true); 
         tempCrop = { 
             x: Math.min(startX, currentX), 
             y: Math.min(startY, currentY), 
@@ -369,7 +333,7 @@ function showEditInterface(screenshotsData) {
         };
         drawTemporaryCropVisual(activeCanvas.getContext('2d'), tempCrop);
       } else {
-        redrawCanvas(activeCanvas, tempDrawings, tempCrop); // Redraw existing state
+        redrawCanvas(activeCanvas, tempDrawings, tempCrop); 
         const ctx = activeCanvas.getContext('2d');
         if (currentDrawingTool === 'highlighter') {
             ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
@@ -394,14 +358,13 @@ function showEditInterface(screenshotsData) {
         if (!isDrawing || !activeCanvas || activeCanvas !== pagePreviewDiv.canvas) return;
       
         const rect = activeCanvas.getBoundingClientRect();
-        // Use event.clientX/Y for consistency, check if event is available (might be null for mouseleave if not careful)
-        const endX = event ? event.clientX - rect.left : currentX; // Fallback to last known currentX for mouseleave
-        const endY = event ? event.clientY - rect.top : currentY; // Fallback to last known currentY
+        const endX = event ? event.clientX - rect.left : startX; 
+        const endY = event ? event.clientY - rect.top : startY;
   
         const ssObject = currentScreenshots.find(s => s.originalIndex === activeScreenshotIndex);
         if (!ssObject) {
             isDrawing = false; activeCanvas = null; activeScreenshotIndex = -1;
-            if(pagePreviewDiv.canvas) pagePreviewDiv.canvas.style.pointerEvents = 'none'; // Reset pointer events
+            if(pagePreviewDiv.canvas) pagePreviewDiv.canvas.style.pointerEvents = 'none'; 
             return;
         }
   
@@ -425,7 +388,7 @@ function showEditInterface(screenshotsData) {
         } else if (currentDrawingTool === 'circle') {
           const dX = endX - startX;
           const dY = endY - startY;
-          const radius = Math.max(1, Math.sqrt(dX*dX + dY*dY) / 2); // Ensure radius is at least 1
+          const radius = Math.max(1, Math.sqrt(dX*dX + dY*dY) / 2); 
           ssObject.drawings.push({ 
             type: 'circle', 
             cx: startX + dX/2, cy: startY + dY/2, radius: radius, 
@@ -435,21 +398,17 @@ function showEditInterface(screenshotsData) {
         
         isDrawing = false; 
         redrawCanvas(activeCanvas, ssObject.drawings, ssObject.cropRegion);
-        if (activeCanvas) activeCanvas.style.pointerEvents = 'none'; // Reset pointer events on active canvas
+        if (activeCanvas) activeCanvas.style.pointerEvents = 'none'; 
         activeCanvas = null;
         activeScreenshotIndex = -1;
     };
 
     pagePreviewDiv.addEventListener('mouseup', endDrawing);
     pagePreviewDiv.addEventListener('mouseleave', (event) => {
-        // Only end drawing if mouse actually leaves the div while drawing
         if (isDrawing && activeCanvas === pagePreviewDiv.canvas) {
-            // Check if mouse is truly outside; complex if there are children elements
-            // For simplicity, we assume mouseleave on div means end drawing.
-            // Consider the mouse position relative to the div.
              const rect = pagePreviewDiv.getBoundingClientRect();
              if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
-                endDrawing(event); // Pass event to get endX, endY
+                endDrawing(event); 
              }
         }
     });
@@ -563,7 +522,7 @@ async function generatePDF(screenshotsToProcess) {
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
   const margin = 10;
   const pageWidth = pdf.internal.pageSize.getWidth();
-  const pageHeightInPdf = pdf.internal.pageSize.getHeight(); // Renamed for clarity
+  const pageHeightInPdf = pdf.internal.pageSize.getHeight(); 
   const contentWidth = pageWidth - 2 * margin;
 
   try {
@@ -675,7 +634,7 @@ async function generatePDF(screenshotsToProcess) {
       
       let imageWidthInPdf = contentWidth;
       let imageHeightInPdf = (sourceCanvas.height / sourceCanvas.width) * imageWidthInPdf;
-      const maxImageHeightInPdf = pageHeightInPdf * 0.70;
+      const maxImageHeightInPdf = pageHeightInPdf * 0.70; 
 
       if (imageHeightInPdf > maxImageHeightInPdf) {
           imageHeightInPdf = maxImageHeightInPdf;
@@ -684,19 +643,19 @@ async function generatePDF(screenshotsToProcess) {
       let imageXPositionInPdf = margin + (contentWidth - imageWidthInPdf) / 2;
       
       pdf.addImage(processedImageDataUrl, 'PNG', imageXPositionInPdf, currentY, imageWidthInPdf, imageHeightInPdf);
-      currentY += imageHeightInPdf + 5; // Add some space after image
+      currentY += imageHeightInPdf + 5; 
 
       if (screenshot.annotation && screenshot.annotation.trim() !== "") {
-        pdf.setFontSize(10); // Set font size for annotation
-        const textLines = pdf.splitTextToSize(screenshot.annotation, contentWidth); // Wrap text
-        const textBlockHeight = textLines.length * (pdf.getLineHeightFactor() * pdf.getFontSize_pt() / pdf.internal.scaleFactor); // Approximate height
+        pdf.setFontSize(10); 
+        const textLines = pdf.splitTextToSize(screenshot.annotation, contentWidth); 
+        const textBlockHeight = textLines.length * (pdf.getLineHeightFactor() * pdf.getFontSize_pt() / pdf.internal.scaleFactor); 
         
-        if (currentY + textBlockHeight > pageHeightInPdf - margin) { // Check if text fits
+        if (currentY + textBlockHeight > pageHeightInPdf - margin) { 
           pdf.addPage();
           currentY = margin;
         }
         pdf.text(textLines, margin, currentY);
-        currentY += textBlockHeight; // Move currentY past the text block
+        currentY += textBlockHeight; 
       }
     }
     pdf.save('training_guide.pdf');
@@ -705,9 +664,8 @@ async function generatePDF(screenshotsToProcess) {
     console.error("Error generating PDF:", error);
     alert("An error occurred while generating the PDF. Check console for details.");
   } finally {
-    // If this is a tab, don't automatically reset to initial view, let user decide via "Back to Record"
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('view') !== 'editor') {
+    if (urlParams.get('view') !== 'editor') { // Only reset if it was the popup action window
         if (initialSection) initialSection.style.display = 'block';
         if (recordingSection) recordingSection.style.display = 'none';
         if (editSection) editSection.style.display = 'none';
@@ -748,23 +706,22 @@ document.getElementById('downloadAudioButton').addEventListener('click', () => {
   });
 });
 
-// Tool Button Event Listeners
 document.getElementById('enableDrawingMode').addEventListener('click', () => {
   drawingEnabled = !drawingEnabled;
-  updateDrawingToolButtons(); // This will also update active state if drawing is disabled
+  updateDrawingToolButtons(); 
   
   const canvases = document.querySelectorAll('.page-preview canvas');
   canvases.forEach(c => {
       c.style.cursor = drawingEnabled ? 'crosshair' : 'default';
-      c.style.pointerEvents = drawingEnabled ? 'auto' : 'none'; // Control mouse interaction
+      c.style.pointerEvents = drawingEnabled ? 'auto' : 'none'; 
   });
 
   if (!drawingEnabled) {
-    currentDrawingTool = 'none'; // Deselect any tool
-    updateActiveToolButton(null); // Clear active button visual
+    currentDrawingTool = 'none'; 
+    updateActiveToolButton(null); 
     isDrawing = false; 
     if (activeCanvas) {
-        activeCanvas.style.pointerEvents = 'none'; // Reset pointer events on the last active canvas
+        activeCanvas.style.pointerEvents = 'none'; 
         activeCanvas = null;
     }
     activeScreenshotIndex = -1;
@@ -807,14 +764,13 @@ function updateDrawingToolButtons() {
   });
   
   if (drawingEnabled) {
-    // If a tool is active, ensure its button reflects that
     if(currentDrawingTool !== 'none'){
         updateActiveToolButton(`tool${currentDrawingTool.charAt(0).toUpperCase() + currentDrawingTool.slice(1)}`);
     } else {
-        updateActiveToolButton(null); // No tool selected
+        updateActiveToolButton(null); 
     }
   } else {
-    updateActiveToolButton(null); // No drawing mode, so no active tool
+    updateActiveToolButton(null); 
   }
 }
 
