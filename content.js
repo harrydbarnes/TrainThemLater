@@ -1,6 +1,6 @@
 // harrydbarnes/trainthemlater/TrainThemLater-main/content.js
 let isRecording = false;
-let audioSettingForNextStart = false;
+let audioSettingForNextStart = false; // This will store the preference
 let overlayContainer;
 
 function initOverlay() {
@@ -13,7 +13,7 @@ function initOverlay() {
             document.body.appendChild(overlayContainer);
         } else {
             window.addEventListener('DOMContentLoaded', () => document.body.appendChild(overlayContainer));
-            return; // Buttons will be added after DOMContentLoaded completes initOverlay again
+            return; 
         }
     }
     
@@ -66,15 +66,16 @@ function handleStartClick() {
     chrome.runtime.sendMessage({ action: 'startRecording', recordAudio: audioSettingForNextStart }, (response) => {
         if (chrome.runtime.lastError) {
             console.error("Content.js: Error from 'startRecording' message to background:", chrome.runtime.lastError.message);
-            updateOverlayButtons(false); // Ensure UI reflects that start failed
+            updateOverlayButtons(false); 
         } else if (response && response.success) {
             console.log("Content.js: 'startRecording' message acknowledged by background. Waiting for 'recordingActuallyStarted'.");
-            // UI update (button text change) will be handled by 'recordingActuallyStarted' listener
         } else {
             console.error("Content.js: Failed to start recording (background response):", response ? response.error : "No response or error");
-            updateOverlayButtons(false); // Ensure UI reflects that start failed
+            updateOverlayButtons(false); 
         }
-        audioSettingForNextStart = false; // Reset for next potential start
+        // audioSettingForNextStart is typically reset by popup logic when it triggers this.
+        // If start is initiated purely by overlay, ensure it's reset or managed appropriately.
+        // For now, we assume popup sets it before overlay interaction.
     });
 }
 
@@ -110,7 +111,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let responded = false;
   const ensureResponse = (responseValue) => {
     if (!responded) {
-      try { sendResponse(responseValue); } catch (e) { /* Port might be closed if BG crashed */ console.warn("Content.js: sendResponse failed for action '"+message.action+"':", e.message); }
+      try { sendResponse(responseValue); } catch (e) { console.warn("Content.js: sendResponse failed for action '"+message.action+"':", e.message); }
       responded = true;
     }
   };
@@ -118,7 +119,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("Content.js: Received message:", message.action);
   switch (message.action) {
     case 'showOverlayButtons':
-      if (!overlayContainer && document.body) initOverlay(); // Ensure overlay is initialized
+      if (!overlayContainer && document.body) initOverlay(); 
       if (overlayContainer) overlayContainer.style.display = 'block';
         
       chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
@@ -126,10 +127,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (response) { isRecording = !!response.isRecording; updateOverlayButtons(isRecording); }
         ensureResponse({success: true});
       });
-      return true; // Async due to nested sendMessage
+      return true; 
 
     case 'hideOverlayButtons':
       if (overlayContainer) overlayContainer.style.display = 'none';
+      ensureResponse({success: true});
+      return false; 
+
+    case 'setAudioPreference': // New case to handle audio preference from popup
+      audioSettingForNextStart = message.recordAudio;
+      console.log("Content.js: Audio preference set to", audioSettingForNextStart);
       ensureResponse({success: true});
       return false; // Sync
 
@@ -138,34 +145,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       isRecording = true;
       updateOverlayButtons(true);
       ensureResponse({success: true});
-      return false; // Sync
+      return false; 
 
     case 'recordingActuallyStopped':
       console.log("Content.js: 'recordingActuallyStopped' received from background.");
       isRecording = false;
       updateOverlayButtons(false);
       ensureResponse({success: true});
-      return false; // Sync
+      return false; 
 
     case 'recordingStateChanged':
       isRecording = message.newIsRecordingState;
       updateOverlayButtons(isRecording);
       ensureResponse({success: true});
-      return false; // Sync
+      return false; 
 
-    case 'triggerStartRecording':
+    case 'triggerStartRecording': // This is called by popup.js
       const startBtn = document.getElementById('ttlOverlayStartButton');
       if (!isRecording && startBtn) {
-        audioSettingForNextStart = message.recordAudio;
+        audioSettingForNextStart = message.recordAudio; // Set audio pref from popup
         console.log("Content.js: Triggering overlay start button click. Audio pref:", audioSettingForNextStart);
-        startBtn.click();
+        startBtn.click(); // This will call handleStartClick which uses audioSettingForNextStart
       } else {
         console.warn("Content.js: triggerStartRecording received but already recording or no start button.");
       }
       ensureResponse({success: true});
-      return false; // Sync
+      return false; 
 
-    case 'triggerStopRecording':
+    case 'triggerStopRecording': // This is called by popup.js
       const stopBtn = document.getElementById('ttlOverlayStopButton');
       if (isRecording && stopBtn) {
         console.log("Content.js: Triggering overlay stop button click.");
@@ -174,7 +181,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
          console.warn("Content.js: triggerStopRecording received but not recording or no stop button.");
       }
       ensureResponse({success: true});
-      return false; // Sync
+      return false; 
 
     default:
       console.log("Content.js: Unknown action received:", message.action);
