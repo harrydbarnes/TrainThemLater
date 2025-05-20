@@ -1,138 +1,155 @@
-let isRecording = false;
-let screenshots = [];
+let isRecording = false; // Local state for UI, actual state in background.js
+let screenshots = []; // This might be redundant here if all screenshot handling is in background/popup
 
-// Create overlay buttons
+const overlayContainer = document.createElement('div');
+overlayContainer.id = 'ttlOverlayContainer';
+overlayContainer.style.cssText = `
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 10000; /* Ensure it's on top */
+  display: none; /* Initially hidden */
+  background-color: rgba(0, 0, 0, 0.6); /* Semi-transparent background */
+  padding: 10px;
+  border-radius: 10px;
+  box-shadow: 0px 0px 10px rgba(0,0,0,0.5);
+`;
+document.body.appendChild(overlayContainer);
+
+
 const startButton = document.createElement('button');
 startButton.id = 'ttlOverlayStartButton';
 startButton.textContent = 'Start Recording';
-document.body.appendChild(startButton);
+overlayContainer.appendChild(startButton);
 
 const stopButton = document.createElement('button');
 stopButton.id = 'ttlOverlayStopButton';
 stopButton.textContent = 'Stop Recording';
-document.body.appendChild(stopButton);
+overlayContainer.appendChild(stopButton);
 
 // Style buttons
 const commonButtonStyle = `
-  position: fixed;
-  bottom: 20px;
-  z-index: 9999;
-  padding: 10px;
+  padding: 10px 15px;
   color: white;
   border: none;
-  border-radius: 5px;
+  border-radius: 8px; /* More rounded */
   cursor: pointer;
+  margin: 5px;
+  font-size: 14px;
+  transition: background-color 0.2s ease-in-out, opacity 0.2s ease-in-out;
+  opacity: 0.9; /* Slightly transparent */
 `;
 
 startButton.style.cssText = commonButtonStyle + `
-  right: 150px; /* Position adjusted to avoid overlap */
-  background-color: #007bff;
+  background-color: #28a745; /* Green for start */
 `;
+startButton.onmouseover = () => startButton.style.opacity = '1';
+startButton.onmouseout = () => startButton.style.opacity = '0.9';
+
 
 stopButton.style.cssText = commonButtonStyle + `
-  right: 20px;
-  background-color: #dc3545; /* Red color for stop button */
+  background-color: #dc3545; /* Red for stop */
 `;
+stopButton.onmouseover = () => stopButton.style.opacity = '1';
+stopButton.onmouseout = () => stopButton.style.opacity = '0.9';
 
 
-// Initial button state
-startButton.style.display = 'block';
-stopButton.style.display = 'none';
+// Initial button state logic (will be controlled by messages)
+function updateOverlayButtons(isRec) {
+    startButton.style.display = isRec ? 'none' : 'inline-block';
+    stopButton.style.display = isRec ? 'inline-block' : 'none';
+}
+updateOverlayButtons(false); // Default to not recording
 
-// Event Handlers
+
+// Event Handlers for overlay buttons
 startButton.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: 'startRecording' });
-  isRecording = true; // Update local state
-  startButton.style.display = 'none';
-  stopButton.style.display = 'block';
+  // Tell background to start recording. Popup should reflect this change too.
+  const recordAudioCheckbox = document.getElementById('recordAudioCheckbox'); // This needs to be in popup.html
+  const shouldRecordAudio = recordAudioCheckbox ? recordAudioCheckbox.checked : false; // Safely check
+  
+  chrome.runtime.sendMessage({ action: 'startRecording', recordAudio: shouldRecordAudio }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error("Error msg from startRecording in background:", chrome.runtime.lastError.message);
+      // Potentially inform user via an alert or a status message in the overlay
+      return;
+    }
+    if (response && response.success) {
+      isRecording = true;
+      updateOverlayButtons(isRecording);
+    } else {
+      console.error("Failed to start recording:", response ? response.error : "No response");
+      // Handle error, e.g., alert user or update UI
+    }
+  });
 });
 
 stopButton.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: 'stopRecording' });
-  isRecording = false; // Update local state
-  stopButton.style.display = 'none';
-  startButton.style.display = 'block';
+  chrome.runtime.sendMessage({ action: 'stopRecording' }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error("Error msg from stopRecording in background:", chrome.runtime.lastError.message);
+      return;
+    }
+    if (response) { // response will be { screenshots, audioAvailable }
+      isRecording = false;
+      updateOverlayButtons(isRecording);
+      // Send screenshots to popup for editing
+      chrome.runtime.sendMessage({ action: 'showEditInterfaceMessage', data: response });
+      overlayContainer.style.display = 'none'; // Hide overlay after stopping
+    }
+  });
 });
 
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'startRecording') {
-    isRecording = true;
-    screenshots = [];
-    startButton.style.display = 'none';
-    stopButton.style.display = 'block';
-  } else if (message.action === 'stopRecording') { // This case might become redundant if recordingStateChanged is reliable
-    isRecording = false;
-    startButton.style.display = 'block';
-    stopButton.style.display = 'none';
-    // No need to send generatePDF from here, background.js handles it
-  } else if (message.action === 'updateButtonState') { // For initial state sync from popup (less critical now)
-    console.warn('content.js received deprecated updateButtonState message. State should be managed by recordingStateChanged.');
-    if (message.isRecording) {
-      isRecording = true;
-      startButton.style.display = 'none';
-      stopButton.style.display = 'block';
-    } else {
-      isRecording = false;
-      startButton.style.display = 'block';
-      stopButton.style.display = 'none';
-    }
+  if (message.action === 'showOverlayButtons') {
+    overlayContainer.style.display = 'block';
+    // Query current recording state to set buttons correctly
+    chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
+      if (response && response.isRecording !== undefined) {
+        isRecording = response.isRecording;
+        updateOverlayButtons(isRecording);
+      }
+    });
+  } else if (message.action === 'hideOverlayButtons') {
+    overlayContainer.style.display = 'none';
   } else if (message.action === 'recordingStateChanged') {
-    console.log('content.js received recordingStateChanged:', message.newIsRecordingState);
+    // This message comes from background.js when the recording state *actually* changes
     isRecording = message.newIsRecordingState;
-    
-    // Using the globally defined startButton and stopButton constants
-    if (startButton && stopButton) {
-        if (isRecording) {
-            startButton.style.display = 'none';
-            stopButton.style.display = 'block';
-        } else {
-            startButton.style.display = 'block';
-            stopButton.style.display = 'none';
-        }
-    } else {
-        console.warn('Overlay buttons not found in content.js when trying to update for recordingStateChanged.');
+    updateOverlayButtons(isRecording);
+    if (!isRecording && overlayContainer.style.display === 'block') {
+        // If recording stopped from popup, and overlay is visible,
+        // it implies we should now fetch screenshots and show editor via popup.
+        // However, the popup will initiate the fetch of screenshots after its own stop button.
+        // Consider if content script needs to do anything else here.
+        // For now, just update its local state.
     }
-    // No sendResponse needed for this type of notification
+  } else if (message.action === 'triggerStartRecording') {
+    // This message comes from popup.js if user clicks start in popup instead of overlay
+    if (!isRecording) { // Prevent starting if already recording
+        startButton.click(); // Simulate click on overlay's start button
+    }
+  } else if (message.action === 'triggerStopRecording') {
+     // This message comes from popup.js if user clicks stop in popup instead of overlay
+    if (isRecording) {
+        stopButton.click(); // Simulate click on overlay's stop button
+    }
   }
 });
 
-// Query initial recording state
+
+// Initial query for recording state to set buttons correctly if overlay is made visible later
+// This is more of a safety check, as 'showOverlayButtons' will also query the state.
 chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
-  if (chrome.runtime.lastError) {
-    console.error("Error querying initial recording state:", chrome.runtime.lastError.message);
-    // Default to not recording if state cannot be fetched
-    isRecording = false;
-    if (startButton && stopButton) { // Check if buttons exist
-        startButton.style.display = 'block';
-        stopButton.style.display = 'none';
-    }
-  } else if (response && response.isRecording !== undefined) {
+  if (response && response.isRecording !== undefined) {
     isRecording = response.isRecording;
-    if (startButton && stopButton) { // Check if buttons exist
-        if (isRecording) {
-          startButton.style.display = 'none';
-          stopButton.style.display = 'block';
-        } else {
-          startButton.style.display = 'block';
-          stopButton.style.display = 'none';
-        }
-    }
-  } else {
-    // Fallback if response is not as expected
-    console.warn("Unexpected response or no response from getRecordingState.");
-    isRecording = false;
-    if (startButton && stopButton) { // Check if buttons exist
-        startButton.style.display = 'block';
-        stopButton.style.display = 'none';
-    }
+    updateOverlayButtons(isRecording); // Update buttons but container remains hidden initially
   }
 });
 
 document.addEventListener('click', (event) => {
-  // Ensure the click is not on our overlay buttons
-  if (event.target.id === 'ttlOverlayStartButton' || event.target.id === 'ttlOverlayStopButton') {
-    return;
+  if (event.target.id === 'ttlOverlayStartButton' || event.target.id === 'ttlOverlayStopButton' || event.target.id === 'ttlOverlayContainer' || overlayContainer.contains(event.target)) {
+    return; // Ignore clicks on the overlay itself
   }
 
   if (isRecording) {
@@ -141,13 +158,10 @@ document.addEventListener('click', (event) => {
 
     chrome.runtime.sendMessage({ action: 'captureScreenshot', clickX, clickY }, (response) => {
       if (chrome.runtime.lastError) {
-        // Handle error, e.g., if the background script is not ready
         console.error("Error capturing screenshot:", chrome.runtime.lastError.message);
         return;
       }
-      if (response) {
-        screenshots.push(response);
-      }
+      // screenshot data is handled by background.js
     });
   }
 });
