@@ -29,7 +29,7 @@ function updateActionIcon(recording) {
 function notifyUIsOfRecordingState(isRec) {
     // Notify content scripts
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0] && tabs[0].id) {
+        if (tabs && tabs.length > 0 && tabs[0].id) {
             chrome.tabs.sendMessage(tabs[0].id, { action: isRec ? 'recordingActuallyStarted' : 'recordingActuallyStopped' }, response => {
                 if (chrome.runtime.lastError) console.warn("Background: Error notifying content script of recording state change:", chrome.runtime.lastError.message);
             });
@@ -111,11 +111,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   chrome.storage.local.set({ isRecording: false });
                   notifyUIsOfRecordingState(false);
                   chrome.storage.local.get(['screenshots'], (result) => {
-                    chrome.runtime.sendMessage({
-                        action: 'showEditInterfaceMessage',
-                        data: { screenshots: result.screenshots || [], audioAvailable: !!recordedAudioBlob }
-                    });
-                    chrome.storage.local.set({ screenshots: [] }); 
+                    const editorDataForUnexpectedStop = { screenshots: result.screenshots || [], audioAvailable: !!recordedAudioBlob };
+                     chrome.storage.local.set({ pendingEditorData: editorDataForUnexpectedStop, screenshots: [] }, () => {
+                        if (!chrome.runtime.lastError) {
+                             chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=editor&source=background&timestamp=' + Date.now()) });
+                        } else {
+                            console.error("Background: Storage error during unexpected stop processing for editor data.");
+                        }
+                     });
                   });
               }
             };
@@ -127,7 +130,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             console.log('Background: MediaRecorder started for audio.');
             if (stream) { // Check if stream still exists before assigning oninactive
-                stream.oninactive = mediaRecorder.onstop; 
+                 stream.oninactive = mediaRecorder.onstop; 
             }
             completeStartRecording();
           });
@@ -176,29 +179,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const wasRecording = isActuallyRecording; 
       isActuallyRecording = false; 
       updateActionIcon(false);
-      chrome.storage.local.set({ isRecording: false }); 
+      chrome.storage.local.set({ isRecording: false }, () => {
+        if(chrome.runtime.lastError) console.warn("Background: Error setting isRecording to false in storage on stop:", chrome.runtime.lastError.message);
+      }); 
 
       const processStopAndRespond = () => {
         chrome.storage.local.get(['screenshots'], (result) => {
           const screenshots = result.screenshots || [];
-          chrome.storage.local.set({ screenshots: [] }, () => {
-            if(chrome.runtime.lastError) console.error("Background: Error clearing screenshots from storage:", chrome.runtime.lastError.message);
-          });
+          const editorData = { screenshots, audioAvailable: !!recordedAudioBlob };
 
-          console.log('Background: isRecording set to false. Sending showEditInterfaceMessage.');
-          chrome.runtime.sendMessage({ 
-            action: 'showEditInterfaceMessage',
-            data: { screenshots, audioAvailable: !!recordedAudioBlob }
-          });
-          
-          console.log("Background: Notifying UIs that recording stopped.");
-          notifyUIsOfRecordingState(false); 
+          chrome.storage.local.set({ pendingEditorData: editorData, screenshots: [] }, () => {
+            if (chrome.runtime.lastError) {
+              console.error("Background: Error setting pendingEditorData/clearing screenshots:", chrome.runtime.lastError.message);
+              notifyUIsOfRecordingState(false); 
+              sendResponse({ success: false, error: "Storage error before opening editor." });
+              return;
+            }
+            
+            console.log('Background: Data for editor stored. Opening editor tab.');
+            chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=editor&source=background&timestamp=' + Date.now()) });
+            
+            notifyUIsOfRecordingState(false); 
 
-          if (wasRecording) { 
-            sendResponse({ success: true, stopped: true });
-          } else {
-            sendResponse({ success: false, error: "No recording was active to stop."});
-          }
+            if (wasRecording) { 
+              sendResponse({ success: true, stopped: true });
+            } else {
+              sendResponse({ success: false, error: "No recording was active to stop."});
+            }
+          });
         });
       };
 
@@ -271,7 +279,6 @@ chrome.storage.local.get('isRecording', (result) => {
     } else if (isActuallyRecording && !storedIsRecording) {
         console.warn("Background: Active recording stream detected, but storage indicates not recording. Forcing stop.");
         isActuallyRecording = false;
-        // updateActionIcon(false); // Will be called in the general updateActionIcon below
         chrome.storage.local.set({ isRecording: false });
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop(); 
