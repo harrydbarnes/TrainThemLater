@@ -4,20 +4,29 @@
   <title>TTL Editor</title>
   <style>
     body {
-      /* For centering the entire editor content if it's narrower than the viewport */
       display: flex;
       flex-direction: column;
-      align-items: center;
+      align-items: center; /* This will center the content horizontally */
       padding: 10px;
       font-family: Arial, sans-serif;
       background-color: #f4f7f6;
-      margin: 0; /* Remove default body margin */
+      margin: 0;
+      box-sizing: border-box; /* Ensures padding and border are included in width/height */
     }
-    /* Centering for popup view (initial/recording sections) */
+
+    /* When the popup is in its initial/recording state (not editor view) */
+    body:not(.editor-view) {
+      /* initialSection is 300px wide.
+         Body has 10px padding on left + 10px on right = 20px total horizontal padding.
+         So, the body needs to be at least 300px + 20px = 320px wide. */
+      width: 320px;
+    }
+
+    /* Centering and width for the content sections in popup view */
     body:not(.editor-view) #initialSection,
     body:not(.editor-view) #recordingSection {
-        width: 300px; /* Original popup width */
-        margin: 0 auto;
+        width: 300px; /* The content itself is 300px wide */
+        text-align: center;
     }
 
     button {
@@ -59,17 +68,16 @@
       cursor: not-allowed;
     }
 
-    #initialSection, #recordingSection {
-        text-align: center;
-    }
+    /* #initialSection, #recordingSection are handled by body:not(.editor-view) rules now for width */
+    /* text-align is on the sections themselves if needed */
 
     #editSection {
       display: none; /* Initially hidden */
-      width: 90%; /* Make editor section take more width */
+      width: 90%; /* Make editor section take more width of its parent (body) */
       max-width: 1200px; /* But not too wide on large screens */
-      margin: 20px auto; /* Center it */
+      margin: 20px auto; /* Center #editSection if body is wider */
       background-color: #fff;
-      padding: 20px;
+      padding: 20px; /* #editSection has its own internal padding */
       border-radius: 8px;
       box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
