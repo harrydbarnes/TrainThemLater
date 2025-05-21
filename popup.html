@@ -1,34 +1,52 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>TTL</title>
+  <title>TTL Editor</title>
   <style>
     body {
-      width: 300px;
+      /* For centering the entire editor content if it's narrower than the viewport */
+      display: flex;
+      flex-direction: column;
+      align-items: center;
       padding: 10px;
       font-family: Arial, sans-serif;
-      background-color: #f4f7f6; /* Light background for the popup */
+      background-color: #f4f7f6;
+      margin: 0; /* Remove default body margin */
     }
+    /* Centering for popup view (initial/recording sections) */
+    body:not(.editor-view) #initialSection,
+    body:not(.editor-view) #recordingSection {
+        width: 300px; /* Original popup width */
+        margin: 0 auto;
+    }
+
     button {
-      width: 100%;
-      padding: 12px; /* Increased padding */
-      margin: 8px 0; /* Adjusted margin */
+      padding: 12px;
+      margin: 8px 0;
       font-size: 16px;
       border: none;
-      border-radius: 6px; /* More rounded corners */
+      border-radius: 6px;
       cursor: pointer;
-      transition: background-color 0.3s ease; /* Smooth transition for hover */
+      transition: background-color 0.3s ease;
     }
     .primary-action-btn {
-      background-color: #4A55A2; /* Indigo blue */
+      background-color: #4A55A2;
       color: white;
+      width: auto; /* Allow button to size based on content */
+      min-width: 120px; /* Ensure a decent minimum width */
+      margin-left: 5px;
+      margin-right: 5px;
     }
     .primary-action-btn:hover {
-      background-color: #3A4482; /* Darker indigo on hover */
+      background-color: #3A4482;
     }
     .secondary-action-btn {
       background-color: #6c757d;
       color: white;
+      width: auto;
+      min-width: 120px;
+      margin-left: 5px;
+      margin-right: 5px;
     }
     .secondary-action-btn:hover {
       background-color: #5a6268;
@@ -40,45 +58,99 @@
       color: #666666;
       cursor: not-allowed;
     }
+
+    #initialSection, #recordingSection {
+        text-align: center;
+    }
+
     #editSection {
-      display: none;
+      display: none; /* Initially hidden */
+      width: 90%; /* Make editor section take more width */
+      max-width: 1200px; /* But not too wide on large screens */
+      margin: 20px auto; /* Center it */
+      background-color: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    #trainingTitleContainer {
+        margin-bottom: 20px;
+        text-align: center;
+    }
+    #trainingTitleInput {
+        width: 70%;
+        padding: 10px;
+        font-size: 18px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+    }
+    #editControls {
+      padding: 10px;
+      border-bottom: 1px solid #ccc;
+      margin-bottom: 10px;
+      background-color: #e9ecef;
+      border-radius: 4px;
+      text-align: center; /* Center the buttons within the toolbar */
+      position: sticky; /* Sticky toolbar */
+      top: 0; /* Stick to the top */
+      z-index: 1000; /* Ensure it's above other content */
+    }
+    #editControls button {
+        font-size: 14px;
+        padding: 8px 10px;
+        margin-right: 5px;
+        width: auto;
+        display: inline-block;
+    }
+    #editControls button.active {
+      background-color: #007bff;
+      color: white;
+    }
+    #pagePreviews {
+        margin-top: 20px; /* Add some space below sticky toolbar */
     }
     .page-preview {
-      margin: 10px 0;
+      margin: 20px auto; /* Center previews and add vertical space */
       border: 1px solid #ccc;
-      padding: 5px;
+      padding: 10px;
       text-align: center;
-      background-color: #ffffff; /* White background for previews */
+      background-color: #ffffff;
       border-radius: 4px;
-      position: relative; /* For absolute positioning of canvas */
+      position: relative;
+      width: 80%; /* Screenshot takes 80% of this container */
     }
     .page-preview img {
-      max-width: 100%;
+      max-width: 100%; /* Image scales within its 80% container */
       height: auto;
       display: block;
-      margin-bottom: 5px;
-      border-radius: 3px; /* Slight rounding for images */
+      margin: 0 auto 10px auto; /* Center image and add margin below */
+      border-radius: 3px;
     }
     .page-preview canvas {
       position: absolute;
-      top: 0;
-      left: 0;
+      top: 10px; /* Adjust based on padding */
+      left: 50%; /* Center canvas */
+      transform: translateX(-50%);
+      /* Width/height set by JS to match image */
     }
     .page-preview textarea.annotation-input {
-      width: calc(100% - 12px);
-      padding: 8px; /* Increased padding */
-      margin-bottom: 8px; /* Adjusted margin */
+      width: calc(100% - 20px); /* Adjust for padding */
+      padding: 8px;
+      margin-bottom: 8px;
       border: 1px solid #ddd;
       box-sizing: border-box;
-      min-height: 45px; /* Adjusted min height */
+      min-height: 45px;
       border-radius: 4px;
+    }
+    .page-preview .preview-controls {
+        margin-top: 10px;
     }
     .page-preview .preview-controls button {
         font-size: 12px;
-        padding: 6px 10px; /* Smaller padding for control buttons */
-        margin: 2px;
-        width: auto; /* Allow buttons to size based on content */
-        display: inline-block; /* Align buttons inline */
+        padding: 6px 10px;
+        margin: 2px 5px; /* Add horizontal margin */
+        width: auto;
+        display: inline-block;
     }
     .page-preview button.delete-btn {
       background-color: #ff4d4d;
@@ -86,11 +158,13 @@
     .page-preview button.delete-btn:hover {
       background-color: #cc0000;
     }
-     .page-preview button.clear-btn { /* General clear button style */
+     .page-preview button.clear-btn,
+     .page-preview button.undo-btn {
       background-color: #ffc107;
       color: black;
     }
-    .page-preview button.clear-btn:hover {
+    .page-preview button.clear-btn:hover,
+    .page-preview button.undo-btn:hover {
       background-color: #e0a800;
     }
     .page-preview.deleted {
@@ -104,32 +178,18 @@
     #status {
       margin: 10px 0;
       font-weight: bold;
-      text-align: center; /* Center status text */
-      color: #333; /* Darker text for status */
-    }
-    #editControls {
-      padding: 10px;
-      border-bottom: 1px solid #ccc;
-      margin-bottom: 10px;
-      background-color: #e9ecef; /* Light grey for controls background */
-      border-radius: 4px;
-    }
-    #editControls button {
-        font-size: 14px; /* Slightly smaller font for tool buttons */
-        padding: 8px 10px;
-        margin-right: 5px; /* Spacing between tool buttons */
-        width: auto;
-        display: inline-block;
-    }
-    #editControls button.active {
-      background-color: #007bff; /* Standard blue for active tool */
-      color: white;
+      text-align: center;
+      color: #333;
     }
     #downloadAudioButton {
-        background-color: #28a745; /* Green for download */
+        background-color: #28a745;
     }
     #downloadAudioButton:hover {
         background-color: #218838;
+    }
+    #pdfActionButtons {
+        text-align: center;
+        margin-top: 20px;
     }
   </style>
 </head>
@@ -150,17 +210,20 @@
   </div>
 
   <div id="editSection">
-    <h3>Edit PDF</h3>
+    <div id="trainingTitleContainer">
+        <input type="text" id="trainingTitleInput" placeholder="Enter Training Title Here">
+    </div>
     <div id="editControls">
-      <button id="enableDrawingMode" class="secondary-action-btn">Enable Drawing</button>
-      <button id="toolHighlighter" class="secondary-action-btn" disabled>Highlight</button>
-      <button id="toolCircle" class="secondary-action-btn" disabled>Circle</button>
-      <button id="toolCrop" class="secondary-action-btn" disabled>Crop</button>
+      <button id="toolHighlighter" class="secondary-action-btn">Highlight</button>
+      <button id="toolCircle" class="secondary-action-btn">Circle</button>
+      <button id="toolCrop" class="secondary-action-btn">Crop</button>
     </div>
     <div id="pagePreviews"></div>
-    <button id="savePDF" class="primary-action-btn">Save PDF</button>
-    <button id="downloadAudioButton" style="display:none;">Download Audio</button>
-     <button id="backToRecord" class="secondary-action-btn" style="margin-top:10px;">Back to Record</button>
+    <div id="pdfActionButtons">
+        <button id="savePDF" class="primary-action-btn">Save PDF</button>
+        <button id="downloadAudioButton" style="display:none;" class="secondary-action-btn">Download Audio</button>
+        <button id="backToRecord" class="secondary-action-btn">Finish Editing & Close</button>
+    </div>
   </div>
   <script src="lib/jspdf.umd.min.js"></script>
   <script src="popup.js"></script>
