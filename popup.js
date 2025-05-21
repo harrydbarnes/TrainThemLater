@@ -747,7 +747,7 @@ async function generatePDF(screenshotsToProcess, fileName = 'training_guide.pdf'
       if (screenshot.annotation && screenshot.annotation.trim() !== "") {
         pdf.setFontSize(10);
         const textLines = pdf.splitTextToSize(screenshot.annotation, contentWidth);
-        const textBlockHeight = textLines.length * (pdf.getLineHeightFactor() * pdf.getFontSize_pt() / pdf.internal.scaleFactor);
+        const textBlockHeight = textLines.length * (pdf.getLineHeightFactor() * pdf.getFontSize() / pdf.internal.scaleFactor);
         
         if (currentY + textBlockHeight > pageHeightInPdf - margin) {
           pdf.addPage();
