@@ -198,18 +198,18 @@
         margin-top: 20px;
     }
 
-    /* Styles for the Screenshot Modal */
-    .modal {
-      display: none; /* Hidden by default */
-      position: fixed; /* Stay in place */
-      z-index: 2000; /* Sit on top */
+    /* Styles for the Screenshot Modal (Original before this modification) */
+    /* .modal {
+      display: none; 
+      position: fixed; 
+      z-index: 2000; 
       left: 0;
       top: 0;
-      width: 100%; /* Full width */
-      height: 100%; /* Full height */
-      overflow: auto; /* Enable scroll if needed */
-      background-color: rgba(0,0,0,0.8); /* Black w/ opacity */
-      padding-top: 20px; /* Location of the box */
+      width: 100%; 
+      height: 100%; 
+      overflow: auto; 
+      background-color: rgba(0,0,0,0.8); 
+      padding-top: 20px; 
     }
 
     .modal-content {
@@ -217,14 +217,14 @@
       display: block;
       width: 80%;
       max-width: 700px;
-      max-height: 80vh; /* Max height relative to viewport height */
+      max-height: 80vh; 
     }
     
     .modal-content img {
         display: block;
         margin: 0 auto;
         max-width: 100%;
-        max-height: 100%; /* Ensure image fits within max-height of modal-content */
+        max-height: 100%; 
         border: 3px solid #fff;
         border-radius: 5px;
     }
@@ -262,6 +262,143 @@
     .next-modal:hover, .next-modal:focus {
       color: #bbb;
       text-decoration: none;
+    } */
+
+    /* New Modal Styles & Modal Editing Interface Styles */
+    #modalImageContainer {
+      position: relative; /* For absolute positioning of modalCanvas */
+      display: inline-block; /* Shrink wrap to image size */
+      line-height: 0; /* Prevent extra space below image */
+    }
+
+    #modalImage { /* This ID is for the image shown in the modal */
+        display: block;
+        max-width: 100%; /* Was .modal-content img */
+        max-height: 60vh; /* Adjust to leave space for controls */
+        object-fit: contain;
+        border: 1px solid #444; /* Updated border */
+        border-radius: 4px; /* Updated border-radius */
+    }
+
+    #modalCanvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%; /* Will be dynamically set by JS to image size */
+        height: 100%; /* Will be dynamically set by JS to image size */
+        pointer-events: none;
+        z-index: 1; /* Above image, below controls if they were to overlap */
+    }
+
+    #modalInteractiveElementsContainer {
+        width: 100%;
+        max-width: 550px;
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+    }
+
+    #modalAnnotationInput {
+        width: 100%;
+        min-height: 45px;
+        padding: 8px;
+        border: 1px solid #444;
+        border-radius: 4px;
+        background-color: #3a3a3a; /* Darker input field */
+        color: #f0f0f0; /* Light text */
+        box-sizing: border-box;
+        font-size: 14px;
+    }
+
+    #modalEditControls, #modalUndoControls {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .modal-tool-btn {
+        padding: 8px 12px;
+        font-size: 13px;
+        border: 1px solid #555;
+        border-radius: 5px;
+        cursor: pointer;
+        background-color: #4F5B66; /* Dark slate blue/grey */
+        color: #e0e0e0;
+        transition: background-color 0.2s, border-color 0.2s;
+    }
+    .modal-tool-btn:hover {
+        background-color: #6A737C;
+        border-color: #777;
+    }
+    .modal-tool-btn.active {
+        background-color: #007bff;
+        color: white;
+        border-color: #0056b3;
+    }
+
+    /* Adjustments to existing modal styles for better layout with new controls */
+    .modal { /* This is the main modal container */
+        display: none; /* Hidden by default */
+        position: fixed; 
+        z-index: 2000; 
+        left: 0;
+        top: 0;
+        width: 100%; 
+        height: 100%; 
+        overflow: hidden; /* Was auto, hidden better if content well constrained */
+        background-color: rgba(0,0,0,0.85);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding-top: 0; /* Remove previous padding-top */
+    }
+
+    .modal-content { /* This is the box holding image and controls */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center; 
+        width: auto; /* Fit content */
+        max-width: 90%; /* Max width relative to viewport */
+        max-height: 95vh; /* Max height relative to viewport */
+        background-color: #2c3e50; /* Darker, slightly blueish background */
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 8px 25px rgba(0,0,0,0.5);
+        position: relative; /* Keep for children positioning */
+        overflow: visible; /* Allow nav buttons to sit partially outside if needed */
+    }
+
+    .close-modal, .prev-modal, .next-modal { /* General styles for modal navigation */
+      position: absolute; /* Positioned relative to .modal which is full screen */
+      color: #f1f1f1;
+      font-size: 35px;
+      font-weight: bold;
+      transition: 0.3s;
+      cursor: pointer;
+      user-select: none;
+      z-index: 20; /* Ensure on top of other modal content */
+    }
+    .close-modal {
+      top: 10px; /* Near top-right of viewport */
+      right: 25px; /* Near top-right of viewport */
+    }
+    .prev-modal, .next-modal {
+        top: 50%; /* Vertically centered in viewport */
+        transform: translateY(-50%); 
+        padding: 16px;
+    }
+    .prev-modal { left: 20px; } /* Left of viewport */
+    .next-modal { right: 20px; } /* Right of viewport */
+    
+    .close-modal:hover, .close-modal:focus,
+    .prev-modal:hover, .prev-modal:focus,
+    .next-modal:hover, .next-modal:focus {
+      color: #bbb;
+      text-decoration: none;
     }
   </style>
 </head>
@@ -285,6 +422,11 @@
     <div id="trainingTitleContainer">
         <input type="text" id="trainingTitleInput" placeholder="Enter Training Title Here">
     </div>
+    <div id="authorInfoContainer" style="text-align: center; margin-bottom: 20px;">
+        <input type="text" id="authorFirstNameInput" placeholder="Author First Name" style="margin-right: 5px; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+        <input type="text" id="authorLastNameInput" placeholder="Author Last Name" style="margin-right: 5px; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+        <input type="email" id="authorEmailInput" placeholder="Author Email" style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+    </div>
     <div id="editControls">
       <button id="toolHighlighter" class="secondary-action-btn">Highlight</button>
       <button id="toolCircle" class="secondary-action-btn">Circle</button>
@@ -298,10 +440,26 @@
     </div>
   </div>
 
+  <!-- Modified Modal HTML Structure -->
   <div id="screenshotModal" class="modal">
     <span class="close-modal" id="closeScreenshotModal">&times;</span>
     <div class="modal-content">
-      <img id="modalImage" src="" alt="Full-screen Screenshot">
+      <div id="modalImageContainer">
+        <img id="modalImage" src="" alt="Full-screen Screenshot">
+        <canvas id="modalCanvas"></canvas>
+      </div>
+      <div id="modalInteractiveElementsContainer">
+        <textarea id="modalAnnotationInput" placeholder="Add annotation for this page..."></textarea>
+        <div id="modalEditControls">
+            <button id="modalToolHighlighter" class="modal-tool-btn">Highlight</button>
+            <button id="modalToolCircle" class="modal-tool-btn">Circle</button>
+            <button id="modalToolCrop" class="modal-tool-btn">Crop</button>
+        </div>
+        <div id="modalUndoControls">
+            <button id="modalUndoDrawing" class="modal-tool-btn">Undo Drawing</button>
+            <button id="modalUndoCrop" class="modal-tool-btn">Undo Crop</button>
+        </div>
+      </div>
     </div>
     <a class="prev-modal" id="prevScreenshotModal">&#10094;</a>
     <a class="next-modal" id="nextScreenshotModal">&#10095;</a>
