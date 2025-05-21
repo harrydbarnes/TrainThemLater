@@ -1,6 +1,7 @@
 // harrydbarnes/trainthemlater/TrainThemLater-main/content.js
 let isRecording = false;
-let audioSettingForNextStart = false; 
+let audioSettingForNextStart = false;
+let pageUrlForNextStart = ''; 
 let overlayContainer;
 let startButton; 
 let stopButton; 
@@ -76,15 +77,18 @@ function handleStartClick() {
         stopButton.style.display = 'none'; 
     }
 
-    console.log("Content.js: Overlay Start Button clicked. Audio pref for this start:", audioSettingForNextStart);
-    chrome.runtime.sendMessage({ action: 'startRecording', recordAudio: audioSettingForNextStart }, (response) => {
+    console.log("Content.js: Overlay Start Button clicked. Audio pref:", audioSettingForNextStart, "URL:", pageUrlForNextStart);
+    chrome.runtime.sendMessage({ 
+        action: 'startRecording', 
+        recordAudio: audioSettingForNextStart,
+        pageUrl: pageUrlForNextStart // Send the URL
+    }, (response) => {
         if (chrome.runtime.lastError) {
             console.error("Content.js: Error sending 'startRecording' message to background:", chrome.runtime.lastError.message);
             if (startButton) {
                 startButton.disabled = false;
                 startButton.textContent = 'Start Record';
             }
-            // updateOverlayButtonsUI(false); // State hasn't changed to true yet.
         } else if (response && response.success) {
             console.log("Content.js: 'startRecording' message acknowledged by background. Waiting for 'recordingActuallyStarted'.");
         } else {
@@ -93,7 +97,6 @@ function handleStartClick() {
                 startButton.disabled = false;
                 startButton.textContent = 'Start Record';
             }
-            // updateOverlayButtonsUI(false); // State hasn't changed to true yet
         }
     });
 }
@@ -111,7 +114,7 @@ function handleStopClick() {
     chrome.runtime.sendMessage({ action: 'stopRecording' }, (response) => {
         if (chrome.runtime.lastError) {
             console.error("Content.js: Error sending 'stopRecording' message:", chrome.runtime.lastError.message);
-            if (stopButton) { // Re-enable if error
+            if (stopButton) { 
                 stopButton.disabled = false;
                 stopButton.textContent = 'Stop Record';
             }
@@ -119,7 +122,7 @@ function handleStopClick() {
             console.log("Content.js: 'stopRecording' message acknowledged by background.");
         } else {
             console.error("Content.js: Failed to stop recording (background response):", response ? response.error : "No error message");
-            if (stopButton) { // Re-enable if background reports failure
+            if (stopButton) { 
                 stopButton.disabled = false;
                 stopButton.textContent = 'Stop Record';
             }
@@ -166,7 +169,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (chrome.runtime.lastError) { 
             isRecording = false; 
             console.warn("Content.js: Error getting recording state on showOverlayButtons:", chrome.runtime.lastError.message);
-            updateOverlayButtonsUI(isRecording); // Update UI even on error
+            updateOverlayButtonsUI(isRecording); 
             ensureResponse({success: false, error: chrome.runtime.lastError.message}); 
             return;
         } 
@@ -185,9 +188,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ensureResponse({success: true});
       return false; 
 
-    case 'setAudioPreference': 
+    case 'setAudioAndUrlPreference': 
       audioSettingForNextStart = message.recordAudio;
-      console.log("Content.js: Audio preference set to", audioSettingForNextStart);
+      pageUrlForNextStart = message.pageUrl; 
+      console.log("Content.js: Audio preference set to", audioSettingForNextStart, "URL set to", pageUrlForNextStart);
       ensureResponse({success: true});
       return false; 
 
@@ -215,7 +219,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'triggerStartRecording': 
       if (!isRecording && startButton && !startButton.disabled) { 
         audioSettingForNextStart = message.recordAudio; 
-        console.log("Content.js: Triggering overlay start button click. Audio pref:", audioSettingForNextStart);
+        pageUrlForNextStart = message.pageUrl; 
+        console.log("Content.js: Triggering overlay start button click. Audio pref:", audioSettingForNextStart, "URL:", pageUrlForNextStart);
         startButton.click(); 
       } else {
         console.warn("Content.js: triggerStartRecording received but already recording, no start button, or start already in progress.");
@@ -240,13 +245,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Initial query for recording state
 chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
   if (chrome.runtime.lastError) { return; }
   if (response) {
     isRecording = !!response.isRecording;
     if (!overlayContainer && document.body) {
-        initOverlay(); // This will call updateOverlayButtonsUI
+        initOverlay(); 
     } else if (overlayContainer && overlayContainer.style.display === 'block') {
         updateOverlayButtonsUI(isRecording);
     } else if (overlayContainer) { 
@@ -257,11 +261,30 @@ chrome.runtime.sendMessage({ action: 'getRecordingState' }, (response) => {
 
 document.addEventListener('click', (event) => {
   if (overlayContainer && overlayContainer.contains(event.target)) return;
+  // Temporarily hide overlay before sending screenshot message
+  let overlayWasVisible = false;
+  if (overlayContainer && overlayContainer.style.display !== 'none') {
+      overlayWasVisible = true;
+      overlayContainer.style.display = 'none';
+  }
+
   if (isRecording) {
     const clickX = event.clientX; const clickY = event.clientY;
-    chrome.runtime.sendMessage({ action: 'captureScreenshot', clickX, clickY }, (response) => {
-      if (chrome.runtime.lastError) console.error("Content.js: Error sending captureScreenshot:", chrome.runtime.lastError.message);
-    });
+    // Use a very short timeout to allow the DOM to update (overlay to hide)
+    setTimeout(() => {
+        chrome.runtime.sendMessage({ action: 'captureScreenshot', clickX, clickY }, (response) => {
+            if (chrome.runtime.lastError) console.error("Content.js: Error sending captureScreenshot:", chrome.runtime.lastError.message);
+            // Restore overlay visibility after screenshot attempt
+            if (overlayWasVisible && overlayContainer) {
+                overlayContainer.style.display = 'block';
+            }
+        });
+    }, 50); // 50ms delay, adjust if needed
+  } else {
+      // If not recording, restore overlay visibility immediately if it was hidden
+      if (overlayWasVisible && overlayContainer) {
+          overlayContainer.style.display = 'block';
+      }
   }
 });
 
