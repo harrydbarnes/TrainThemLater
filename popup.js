@@ -1,25 +1,28 @@
 // harrydbarnes/trainthemlater/TrainThemLater-main/popup.js
 let currentScreenshots = [];
-let drawingEnabled = false;
+// let drawingEnabled = false; // No longer needed, tools are always available for selection
 let currentDrawingTool = 'none';
 let isDrawing = false;
 let startX, startY;
 let activeCanvas = null;
-let activeScreenshotIndex = -1; 
+let activeScreenshotIndex = -1;
+let originalPageUrl = ''; // To store the URL for the title
 
 const initialSection = document.getElementById('initialSection');
 const recordingSection = document.getElementById('recordingSection');
 const editSection = document.getElementById('editSection');
 const statusDiv = document.getElementById('status'); 
-const recordingStatusDiv = recordingSection.querySelector('#status'); 
+const recordingStatusDiv = recordingSection.querySelector('#status');
+const trainingTitleInput = document.getElementById('trainingTitleInput');
 
 
 document.addEventListener('DOMContentLoaded', () => {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('view') === 'editor') {
+        document.body.classList.add('editor-view'); // Add class for editor specific styling
         console.log("Popup.js: Detected editor view from URL params.");
         if (urlParams.get('source') === 'background') {
-            chrome.storage.local.get('pendingEditorData', (result) => {
+            chrome.storage.local.get(['pendingEditorData', 'pageUrlForTitle'], (result) => { // Also get pageUrlForTitle
                 if (chrome.runtime.lastError) {
                     console.error("Popup.js: Error getting pendingEditorData:", chrome.runtime.lastError.message);
                     if (initialSection) initialSection.style.display = 'block';
@@ -29,6 +32,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (result.pendingEditorData) {
                     console.log("Popup.js: Editor data found from pendingEditorData.", result.pendingEditorData);
                     const data = result.pendingEditorData;
+                    originalPageUrl = result.pageUrlForTitle || '';
+                    updateTrainingTitle();
+
                     const downloadAudioButton = document.getElementById('downloadAudioButton');
                     if (downloadAudioButton) {
                         downloadAudioButton.style.display = data.audioAvailable ? 'block' : 'none';
@@ -38,11 +44,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (editSection) editSection.style.display = 'block';
                     showEditInterface(data.screenshots ? data.screenshots.map(s => ({...s})) : []);
                     
-                    chrome.storage.local.remove('pendingEditorData', () => {
+                    chrome.storage.local.remove(['pendingEditorData', 'pageUrlForTitle'], () => { // Clear both
                         if (chrome.runtime.lastError) {
-                            console.error("Popup.js: Error clearing pendingEditorData:", chrome.runtime.lastError.message);
+                            console.error("Popup.js: Error clearing pending/URL data:", chrome.runtime.lastError.message);
                         } else {
-                            console.log("Popup.js: pendingEditorData cleared.");
+                            console.log("Popup.js: pendingEditorData and pageUrlForTitle cleared.");
                         }
                     });
                 } else {
@@ -54,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
             loadEditorDataFromStorage();
         }
     } else {
+        document.body.classList.remove('editor-view');
         console.log("Popup.js: Initializing as standard popup action.");
         if (initialSection) initialSection.style.display = 'block';
         if (recordingSection) recordingSection.style.display = 'none';
@@ -76,8 +83,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+function updateTrainingTitle() {
+    if (trainingTitleInput) {
+        if (originalPageUrl) {
+            try {
+                const url = new URL(originalPageUrl);
+                let title = url.hostname + (url.pathname.length > 1 ? url.pathname.replace(/\/$/, '') : '');
+                title = title.replace(/^www\./, ''); // Remove www.
+                trainingTitleInput.value = title + " Training";
+            } catch (e) {
+                trainingTitleInput.value = "Training Guide"; // Fallback
+            }
+        } else {
+            trainingTitleInput.value = "Training Guide";
+        }
+    }
+}
+
+
 function loadEditorDataFromStorage() { 
-    chrome.storage.local.get('editorData', (result) => {
+    chrome.storage.local.get(['editorData', 'pageUrlForTitle'], (result) => {
         if (chrome.runtime.lastError) {
             console.error("Popup.js: Error getting editorData from storage:", chrome.runtime.lastError.message);
             if (initialSection) initialSection.style.display = 'block';
@@ -87,6 +112,9 @@ function loadEditorDataFromStorage() {
         if (result.editorData) {
             console.log("Popup.js: Editor data found in editorData storage.", result.editorData);
             const data = result.editorData;
+            originalPageUrl = result.pageUrlForTitle || originalPageUrl; // Keep if already set by pending
+            updateTrainingTitle();
+
             const downloadAudioButton = document.getElementById('downloadAudioButton');
             if (downloadAudioButton) {
                 downloadAudioButton.style.display = data.audioAvailable ? 'block' : 'none';
@@ -97,6 +125,7 @@ function loadEditorDataFromStorage() {
             showEditInterface(data.screenshots ? data.screenshots.map(s => ({...s})) : []);
         } else {
             console.warn("Popup.js: Editor view specified, but no editorData found in storage either.");
+            updateTrainingTitle(); // Set a default title
             if (editSection && editSection.style.display === 'block') { 
                 const pagePreviews = document.getElementById('pagePreviews');
                 if(pagePreviews) pagePreviews.innerHTML = '<p>No data loaded. Try recording again.</p>';
@@ -115,19 +144,18 @@ document.getElementById('showRecordButtons').addEventListener('click', () => {
   const shouldRecordAudio = document.getElementById('recordAudioCheckbox').checked;
   if (recordingStatusDiv) recordingStatusDiv.textContent = "Use page overlay (bottom right) to Start/Stop.";
 
-
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs && tabs.length > 0 && tabs[0].id) {
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'setAudioPreference', recordAudio: shouldRecordAudio });
+      originalPageUrl = tabs[0].url; // Capture URL here
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'setAudioAndUrlPreference', recordAudio: shouldRecordAudio, pageUrl: originalPageUrl });
       chrome.tabs.sendMessage(tabs[0].id, { action: 'showOverlayButtons' }, (response) => {
         if (chrome.runtime.lastError) {
           console.log('Popup.js: Failed to send showOverlayButtons to content script:', chrome.runtime.lastError.message);
            if (recordingStatusDiv) recordingStatusDiv.textContent = "Error showing overlay. Try refreshing the page.";
         } else {
-            // Consider closing popup if not an editor tab
              const urlParams = new URLSearchParams(window.location.search);
              if (urlParams.get('view') !== 'editor') {
-                setTimeout(() => window.close(), 500); // Short delay before closing
+                setTimeout(() => window.close(), 500); 
              }
         }
       });
@@ -154,6 +182,7 @@ document.getElementById('backToInitial').addEventListener('click', () => {
     if (recordingSection) recordingSection.style.display = 'none';
     if (initialSection) initialSection.style.display = 'block';
     if (statusDiv) statusDiv.textContent = 'Ready to record!';
+    originalPageUrl = ''; // Clear URL
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs && tabs.length > 0 && tabs[0].id) {
@@ -173,8 +202,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("Popup.js: Received 'showEditInterfaceMessage', data:", message.data);
     const urlParams = new URLSearchParams(window.location.search);
     const isEditorView = urlParams.get('view') === 'editor';
+    
+    // Data to store: editorData (screenshots, audioAvailable) and pageUrlForTitle
+    const dataToStore = { 
+        editorData: message.data, 
+        pageUrlForTitle: message.data.pageUrl || originalPageUrl // Prioritize from message if available
+    };
 
-    chrome.storage.local.set({ editorData: message.data }, () => {
+    chrome.storage.local.set(dataToStore, () => {
         if (chrome.runtime.lastError) {
             console.error("Popup.js: Error setting editorData in 'showEditInterfaceMessage':", chrome.runtime.lastError.message);
             sendResponse({success: false, error: "Storage error"});
@@ -183,19 +218,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         
         if (isEditorView) {
             console.log("Popup.js: Refreshing current editor tab with new data.");
+            originalPageUrl = dataToStore.pageUrlForTitle;
+            updateTrainingTitle();
             const downloadAudioButton = document.getElementById('downloadAudioButton');
             if (downloadAudioButton) {
                 downloadAudioButton.style.display = message.data.audioAvailable ? 'block' : 'none';
             }
             showEditInterface(message.data.screenshots ? message.data.screenshots.map(s => ({...s})) : []);
         } else {
-            // This case (non-editor popup receiving this) should be rare now
-            // as background.js directly opens a new editor tab.
-            // If it happens, it implies background didn't open the tab or this is an old popup.
-            console.log("Popup.js: 'showEditInterfaceMessage' received by non-editor. Background should open new tab.");
-            // To be safe, we can still try to open a new editor tab here if one isn't detected.
-            chrome.tabs.query({ url: chrome.runtime.getURL('popup.html?view=editor*') }, (tabs) => {
-                if (tabs.length === 0) { // Only open if no editor tab seems to exist or is being opened
+            console.log("Popup.js: 'showEditInterfaceMessage' received by non-editor. Background should open new tab, or this will try.");
+            // Background should have opened the tab. This is a fallback.
+            // The new tab will use pendingEditorData set by background if this message was for it.
+             chrome.tabs.query({ url: chrome.runtime.getURL('popup.html?view=editor*') }, (tabs) => {
+                let editorTabExists = false;
+                for(let tab of tabs){
+                    if(tab.url.includes("view=editor")){
+                        editorTabExists = true;
+                        // Potentially reload existing editor tab if needed, or just focus it.
+                        // chrome.tabs.update(tab.id, {active: true}); 
+                        // chrome.tabs.reload(tab.id); // This could cause loop if it then tries to load pending data
+                        break;
+                    }
+                }
+                if (!editorTabExists) {
                      chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=editor&source=popupMessageFallback&timestamp=' + Date.now()) });
                 }
             });
@@ -216,11 +261,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (recordingStatusDiv && recordingSection && recordingSection.style.display === 'block') {
         recordingStatusDiv.textContent = 'Recording stopped. Editor is opening...';
     }
-     // It's possible this popup is the action popup and should close
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('view') !== 'editor' && window.location.pathname.endsWith('popup.html')) {
         console.log("Popup.js: Action popup closing on recordingActuallyStopped.");
-        setTimeout(() => window.close(), 500); // Give a moment for other actions
+        setTimeout(() => window.close(), 500); 
     }
     sendResponse({success: true});
   }
@@ -229,31 +273,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 
 document.getElementById('backToRecord').addEventListener('click', () => {
-  if (editSection) editSection.style.display = 'none';
-  if (initialSection) initialSection.style.display = 'block';
-  if (statusDiv) statusDiv.textContent = 'Ready to record!';
-  currentScreenshots = [];
-  const pagePreviews = document.getElementById('pagePreviews');
-  if (pagePreviews) pagePreviews.innerHTML = '';
-  
-  const downloadAudioButton = document.getElementById('downloadAudioButton');
-  if(downloadAudioButton) downloadAudioButton.style.display = 'none';
-
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs && tabs.length > 0 && tabs[0].id) {
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'hideOverlayButtons' }, response => {
-          if(chrome.runtime.lastError) console.warn("Popup.js: Error hiding overlay on backToRecord: " + chrome.runtime.lastError.message);
-      });
-    }
-  });
-
+  // If it's an editor tab, just close it.
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('view') === 'editor') {
     chrome.tabs.getCurrent(tab => {
         if (tab && tab.id) {
-            chrome.tabs.remove(tab.id);
+            chrome.tabs.remove(tab.id, () => {
+                if (chrome.runtime.lastError) {
+                    console.warn("Error closing editor tab:", chrome.runtime.lastError.message);
+                    // Fallback for cases where tab cannot be removed (e.g. if not a tab)
+                    window.location.href = chrome.runtime.getURL("popup.html"); 
+                }
+            });
+        } else { // If not a tab (e.g. popup opened directly as editor, less likely now)
+             window.location.href = chrome.runtime.getURL("popup.html"); 
         }
     });
+  } else { // If somehow on editSection but not in an editor tab (should not happen)
+    if (editSection) editSection.style.display = 'none';
+    if (initialSection) initialSection.style.display = 'block';
+    if (statusDiv) statusDiv.textContent = 'Ready to record!';
+    currentScreenshots = [];
+    if (document.getElementById('pagePreviews')) document.getElementById('pagePreviews').innerHTML = '';
+    if (document.getElementById('downloadAudioButton')) document.getElementById('downloadAudioButton').style.display = 'none';
+    if (trainingTitleInput) trainingTitleInput.value = '';
+    originalPageUrl = '';
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs.length > 0 && tabs[0].id) {
+          chrome.tabs.sendMessage(tabs[0].id, { action: 'hideOverlayButtons' }, response => {
+              if(chrome.runtime.lastError) console.warn("Popup.js: Error hiding overlay on backToRecord: " + chrome.runtime.lastError.message);
+          });
+        }
+      });
   }
 });
 
@@ -268,7 +320,8 @@ document.getElementById('savePDF').addEventListener('click', () => {
   });
 
   if (filteredScreenshots.length > 0) {
-    generatePDF(filteredScreenshots);
+    const fileName = trainingTitleInput.value.trim() || "training_guide";
+    generatePDF(filteredScreenshots, fileName); // Pass the filename
   } else {
     console.log("No pages to save.");
     alert("No pages to save. Please ensure some pages are not marked as deleted.");
@@ -279,17 +332,15 @@ function showEditInterface(screenshotsData) {
   currentScreenshots = screenshotsData.map((s, index) => ({
     ...s,
     annotation: s.annotation || '',
-    drawings: s.drawings || [],
+    drawings: s.drawings || [], // Ensure drawings is always an array
     cropRegion: s.cropRegion || null,
     originalIndex: s.originalIndex !== undefined ? s.originalIndex : index 
   }));
 
-  if (initialSection) initialSection.style.display = 'none';
-  if (recordingSection) recordingSection.style.display = 'none';
-  if (editSection) editSection.style.display = 'block';
-  drawingEnabled = false;
+  // document.getElementById('enableDrawingMode').classList.remove('active'); // Button removed
+  // document.getElementById('enableDrawingMode').textContent = 'Enable Drawing'; // Button removed
   currentDrawingTool = 'none';
-  updateDrawingToolButtons();
+  updateDrawingToolButtons(); // Initialize tool button states (all should be selectable)
 
   const pagePreviews = document.getElementById('pagePreviews');
   if (!pagePreviews) {
@@ -314,30 +365,35 @@ function showEditInterface(screenshotsData) {
     imgElement.src = screenshot.dataUrl;
 
     const canvas = document.createElement('canvas');
-    canvas.style.position = 'absolute';
-    canvas.style.top = '0';
-    canvas.style.left = '0';
-    canvas.style.pointerEvents = 'none'; 
+    // Canvas style adjustments are in CSS, JS will set width/height to match image
+    // canvas.style.position = 'absolute';
+    // canvas.style.top = '0'; // Adjusted by CSS
+    // canvas.style.left = '0';// Adjusted by CSS
+    canvas.style.pointerEvents = 'none'; // Initially, canvas does not intercept mouse events for selection
 
     pagePreviewDiv.appendChild(imgElement);
     pagePreviewDiv.appendChild(canvas);
 
     imgElement.onload = () => {
-      canvas.width = imgElement.clientWidth;
-      canvas.height = imgElement.clientHeight;
+      // Set canvas dimensions based on the *displayed* size of the image
+      const displayedWidth = imgElement.clientWidth;
+      const displayedHeight = imgElement.clientHeight;
+      canvas.width = displayedWidth;
+      canvas.height = displayedHeight;
+      canvas.style.top = imgElement.offsetTop + 'px'; // Position canvas over the image
+      canvas.style.left = imgElement.offsetLeft + 'px';// Position canvas over the image
       pagePreviewDiv.canvas = canvas; 
 
       const ssObject = currentScreenshots.find(s => s.originalIndex === originalIndex);
       if (ssObject) {
-          ssObject.previewWidth = imgElement.clientWidth;
-          ssObject.previewHeight = imgElement.clientHeight;
+          ssObject.previewWidth = displayedWidth;
+          ssObject.previewHeight = displayedHeight;
       }
-      
-      redrawCanvas(canvas, screenshot.drawings, screenshot.cropRegion);
+      redrawCanvas(canvas, screenshot.drawings || [], screenshot.cropRegion);
     };
     
     pagePreviewDiv.addEventListener('mousedown', (event) => {
-      if (!drawingEnabled || currentDrawingTool === 'none') return;
+      if (currentDrawingTool === 'none') return; // Only proceed if a tool is selected
       activeCanvas = pagePreviewDiv.canvas; 
       if (!activeCanvas) return;
 
@@ -361,7 +417,7 @@ function showEditInterface(screenshotsData) {
       const ssObject = currentScreenshots.find(s => s.originalIndex === activeScreenshotIndex);
       if (!ssObject) return;
 
-      const tempDrawings = [...ssObject.drawings];
+      const tempDrawings = [...(ssObject.drawings || [])]; // Ensure drawings is an array
       let tempCrop = ssObject.cropRegion;
 
       if (currentDrawingTool === 'crop') {
@@ -373,7 +429,7 @@ function showEditInterface(screenshotsData) {
             height: Math.abs(currentY - startY) 
         };
         drawTemporaryCropVisual(activeCanvas.getContext('2d'), tempCrop);
-      } else {
+      } else if (currentDrawingTool !== 'none') { // Check for actual drawing tools
         redrawCanvas(activeCanvas, tempDrawings, tempCrop); 
         const ctx = activeCanvas.getContext('2d');
         if (currentDrawingTool === 'highlighter') {
@@ -408,6 +464,9 @@ function showEditInterface(screenshotsData) {
             if(pagePreviewDiv.canvas) pagePreviewDiv.canvas.style.pointerEvents = 'none'; 
             return;
         }
+        if (!Array.isArray(ssObject.drawings)) { // Defensive: Ensure drawings is an array
+            ssObject.drawings = [];
+        }
   
         if (currentDrawingTool === 'crop') {
           const finalCropRect = { 
@@ -440,8 +499,8 @@ function showEditInterface(screenshotsData) {
         isDrawing = false; 
         redrawCanvas(activeCanvas, ssObject.drawings, ssObject.cropRegion);
         if (activeCanvas) activeCanvas.style.pointerEvents = 'none'; 
-        activeCanvas = null;
-        activeScreenshotIndex = -1;
+        // activeCanvas = null; // Don't nullify here if we want to keep it selected for next tool
+        // activeScreenshotIndex = -1; // Keep activeScreenshotIndex to know which canvas we are on
     };
 
     pagePreviewDiv.addEventListener('mouseup', endDrawing);
@@ -475,21 +534,21 @@ function showEditInterface(screenshotsData) {
       deleteBtn.style.backgroundColor = pagePreviewDiv.classList.contains('deleted') ? '#28a745' : '#ff4d4d';
     };
 
-    const clearDrawingsBtn = document.createElement('button');
-    clearDrawingsBtn.className = 'clear-btn';
-    clearDrawingsBtn.textContent = 'Clear Drawings';
-    clearDrawingsBtn.onclick = () => {
+    const undoDrawingBtn = document.createElement('button'); // Renamed
+    undoDrawingBtn.className = 'undo-btn'; // New class potentially for styling
+    undoDrawingBtn.textContent = 'Undo Drawing'; // Renamed
+    undoDrawingBtn.onclick = () => {
       const ssToUpdate = currentScreenshots.find(s => s.originalIndex === originalIndex);
-      if(ssToUpdate && pagePreviewDiv.canvas){
-        ssToUpdate.drawings = [];
-        redrawCanvas(pagePreviewDiv.canvas, [], ssToUpdate.cropRegion);
+      if(ssToUpdate && pagePreviewDiv.canvas && ssToUpdate.drawings && ssToUpdate.drawings.length > 0){
+        ssToUpdate.drawings.pop(); // Remove the last drawing
+        redrawCanvas(pagePreviewDiv.canvas, ssToUpdate.drawings, ssToUpdate.cropRegion);
       }
     };
 
-    const clearCropBtn = document.createElement('button');
-    clearCropBtn.className = 'clear-btn';
-    clearCropBtn.textContent = 'Clear Crop';
-    clearCropBtn.onclick = () => {
+    const undoCropBtn = document.createElement('button'); // Renamed
+    undoCropBtn.className = 'undo-btn'; // New class
+    undoCropBtn.textContent = 'Undo Crop'; // Renamed
+    undoCropBtn.onclick = () => { // Functionality is to clear the current crop
       const ssToUpdate = currentScreenshots.find(s => s.originalIndex === originalIndex);
       if(ssToUpdate && pagePreviewDiv.canvas){
         ssToUpdate.cropRegion = null;
@@ -498,13 +557,16 @@ function showEditInterface(screenshotsData) {
     };
 
     controlsDiv.appendChild(deleteBtn);
-    controlsDiv.appendChild(clearDrawingsBtn); 
-    controlsDiv.appendChild(clearCropBtn);
+    controlsDiv.appendChild(undoDrawingBtn); 
+    controlsDiv.appendChild(undoCropBtn);
 
     pagePreviewDiv.appendChild(annotationInput);
     pagePreviewDiv.appendChild(controlsDiv);
     pagePreviews.appendChild(pagePreviewDiv);
   });
+  // Since "Enable Drawing" is removed, drawing tools are always "enabled" for selection.
+  // We just need to make sure their visual state (active/inactive) is correct.
+  document.querySelectorAll('#editControls button').forEach(btn => btn.disabled = false);
 }
 
 function redrawCanvas(canvas, drawings, cropRegion, isTemporaryDrawing = false) {
@@ -513,17 +575,49 @@ function redrawCanvas(canvas, drawings, cropRegion, isTemporaryDrawing = false) 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   if (cropRegion) {
+    // Apply crop visualization only if not temporary drawing (like during crop selection)
     if (!isTemporaryDrawing) {
+        // Save the original image part that is *within* the crop region
+        const img = canvas.previousElementSibling; // Assuming img is the direct sibling before canvas
+        if (img && img.tagName === 'IMG') {
+            const ssObject = currentScreenshots.find(s => s.originalIndex === parseInt(canvas.parentElement.dataset.index));
+            if (ssObject && ssObject.previewWidth && ssObject.previewHeight) {
+                 // Calculate scale factor from original image to preview image
+                const scaleX = ssObject.previewWidth / (ssObject.imageWidth || ssObject.previewWidth) ; // imageWidth should be original image width
+                const scaleY = ssObject.previewHeight / (ssObject.imageHeight || ssObject.previewHeight); // imageHeight should be original image height
+
+                // Coordinates on the preview canvas
+                const sx = cropRegion.x;
+                const sy = cropRegion.y;
+                const sWidth = cropRegion.width;
+                const sHeight = cropRegion.height;
+                
+                // Temporarily draw the cropped part of the image
+                // This assumes cropRegion is relative to the preview image
+                ctx.drawImage(img, sx, sy, sWidth, sHeight, sx, sy, sWidth, sHeight);
+            }
+        }
+
       ctx.save();
+      // Fill outside the crop region with a semi-transparent overlay
       ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.clearRect(cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height);
+      ctx.fillRect(0, 0, canvas.width, canvas.height); // Fill entire canvas
+      ctx.clearRect(cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height); // Clear the crop area
+
+      // Draw a border around the crop region
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
       ctx.lineWidth = 1;
       ctx.strokeRect(cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height);
       ctx.restore();
     }
+  } else if (isTemporaryDrawing) { // If no crop but it's a temp drawing phase (like selecting crop), do nothing extra to background
+        // This case might not be needed if temp crop visual is handled separately
+  } else { // No crop region, and not temporary drawing, draw full image (already there)
+     // The image is the background, canvas is for drawings on top.
+     // If needed, one could redraw the full image here if the canvas wasn't transparent
+     // ctx.drawImage(canvas.previousElementSibling, 0, 0, canvas.width, canvas.height);
   }
+
 
   (drawings || []).forEach(drawing => {
     ctx.save();
@@ -551,8 +645,7 @@ function drawTemporaryCropVisual(ctx, tempRect) {
   ctx.restore();
 }
 
-
-async function generatePDF(screenshotsToProcess) {
+async function generatePDF(screenshotsToProcess, fileName = 'training_guide.pdf') { // Added fileName param
   if (!window.jspdf || !window.jspdf.jsPDF) {
     console.error("jsPDF library is not loaded.");
     alert("Error: jsPDF library is not loaded. Cannot generate PDF.");
@@ -591,42 +684,46 @@ async function generatePDF(screenshotsToProcess) {
           continue; 
       }
       
-      const originalWidth = originalImage.naturalWidth;
-      const originalHeight = originalImage.naturalHeight;
+      const originalImgWidth = originalImage.naturalWidth; // Renamed for clarity
+      const originalImgHeight = originalImage.naturalHeight; // Renamed for clarity
 
       const sourceCanvas = document.createElement('canvas');
       const sourceCtx = sourceCanvas.getContext('2d');
       
-      let sX = 0, sY = 0, sWidth = originalWidth, sHeight = originalHeight;
-      let dX = 0, dY = 0, dWidth = originalWidth, dHeight = originalHeight;
+      let sX = 0, sY = 0, sWidth = originalImgWidth, sHeight = originalImgHeight; // Use original image dimensions
+      let dX = 0, dY = 0, dWidth = originalImgWidth, dHeight = originalImgHeight;
 
-      const previewWidth = screenshot.previewWidth || originalWidth;
-      const previewHeight = screenshot.previewHeight || originalHeight;
+      // Use previewWidth/Height from the screenshot object if available (set during showEditInterface)
+      const previewWidth = screenshot.previewWidth || originalImgWidth;
+      const previewHeight = screenshot.previewHeight || originalImgHeight;
 
 
       if (screenshot.cropRegion && screenshot.cropRegion.width > 0 && screenshot.cropRegion.height > 0) {
-          sX = screenshot.cropRegion.x * (originalWidth / previewWidth);
-          sY = screenshot.cropRegion.y * (originalHeight / previewHeight);
-          sWidth = screenshot.cropRegion.width * (originalWidth / previewWidth);
-          sHeight = screenshot.cropRegion.height * (originalHeight / previewHeight);
+          // Scale crop region from preview dimensions to original image dimensions
+          sX = screenshot.cropRegion.x * (originalImgWidth / previewWidth);
+          sY = screenshot.cropRegion.y * (originalImgHeight / previewHeight);
+          sWidth = screenshot.cropRegion.width * (originalImgWidth / previewWidth);
+          sHeight = screenshot.cropRegion.height * (originalImgHeight / previewHeight);
 
-          sX = Math.max(0, Math.min(sX, originalWidth - 1));
-          sY = Math.max(0, Math.min(sY, originalHeight - 1));
-          sWidth = Math.max(1, Math.min(sWidth, originalWidth - sX));
-          sHeight = Math.max(1, Math.min(sHeight, originalHeight - sY));
+          sX = Math.max(0, Math.min(sX, originalImgWidth - 1));
+          sY = Math.max(0, Math.min(sY, originalImgHeight - 1));
+          sWidth = Math.max(1, Math.min(sWidth, originalImgWidth - sX));
+          sHeight = Math.max(1, Math.min(sHeight, originalImgHeight - sY));
           
           sourceCanvas.width = sWidth;
           sourceCanvas.height = sHeight;
-          dWidth = sWidth; 
+          dWidth = sWidth; // destination width/height on sourceCanvas is same as source cropped width/height
           dHeight = sHeight;
       } else {
-          sourceCanvas.width = originalWidth;
-          sourceCanvas.height = originalHeight;
+          sourceCanvas.width = originalImgWidth;
+          sourceCanvas.height = originalImgHeight;
       }
       
+      // Draw the (potentially cropped) image onto the sourceCanvas
       sourceCtx.drawImage(originalImage, sX, sY, sWidth, sHeight, dX, dY, dWidth, dHeight);
 
       if (screenshot.drawings && screenshot.drawings.length > 0) {
+          // Scale drawings from preview dimensions to sourceCanvas dimensions
           const scaleXToSourceCanvas = sourceCanvas.width / (screenshot.cropRegion ? screenshot.cropRegion.width : previewWidth);
           const scaleYToSourceCanvas = sourceCanvas.height / (screenshot.cropRegion ? screenshot.cropRegion.height : previewHeight);
 
@@ -640,6 +737,8 @@ async function generatePDF(screenshotsToProcess) {
             let drawingCy = drawing.cy;
             let drawingRadius = drawing.radius;
 
+            // If there was a crop, drawing coordinates are relative to the preview,
+            // but need to be relative to the crop region before scaling to sourceCanvas
             if(screenshot.cropRegion){
                 drawingX -= screenshot.cropRegion.x;
                 drawingY -= screenshot.cropRegion.y;
@@ -657,12 +756,12 @@ async function generatePDF(screenshotsToProcess) {
                 );
             } else if (drawing.type === 'circle') {
                 sourceCtx.strokeStyle = drawing.color;
-                sourceCtx.lineWidth = (drawing.strokeWidth || 2) * Math.min(scaleXToSourceCanvas, scaleYToSourceCanvas);
+                sourceCtx.lineWidth = (drawing.strokeWidth || 2) * Math.min(scaleXToSourceCanvas, scaleYToSourceCanvas); // Scale line width
                 sourceCtx.beginPath();
                 sourceCtx.arc(
                     drawingCx * scaleXToSourceCanvas, 
                     drawingCy * scaleYToSourceCanvas, 
-                    drawingRadius * Math.min(scaleXToSourceCanvas, scaleYToSourceCanvas), 
+                    drawingRadius * Math.min(scaleXToSourceCanvas, scaleYToSourceCanvas), // Scale radius
                     0, 2 * Math.PI
                 );
                 sourceCtx.stroke();
@@ -699,7 +798,7 @@ async function generatePDF(screenshotsToProcess) {
         currentY += textBlockHeight; 
       }
     }
-    pdf.save('training_guide.pdf');
+    pdf.save(fileName.endsWith('.pdf') ? fileName : fileName + '.pdf'); // Use the dynamic filename
     alert('PDF generated successfully!');
   } catch (error) {
     console.error("Error generating PDF:", error);
@@ -719,6 +818,8 @@ async function generatePDF(screenshotsToProcess) {
         currentScreenshots = [];
         const pagePreviews = document.getElementById('pagePreviews');
         if (pagePreviews) pagePreviews.innerHTML = '';
+        if (trainingTitleInput) trainingTitleInput.value = '';
+        originalPageUrl = '';
     }
   }
 }
@@ -746,73 +847,63 @@ document.getElementById('downloadAudioButton').addEventListener('click', () => {
   });
 });
 
-document.getElementById('enableDrawingMode').addEventListener('click', () => {
-  drawingEnabled = !drawingEnabled;
-  updateDrawingToolButtons(); 
-  
-  const canvases = document.querySelectorAll('.page-preview canvas');
-  canvases.forEach(c => {
-      c.style.cursor = drawingEnabled ? 'crosshair' : 'default';
-      c.style.pointerEvents = drawingEnabled ? 'auto' : 'none'; 
-  });
-
-  if (!drawingEnabled) {
-    currentDrawingTool = 'none'; 
-    updateActiveToolButton(null); 
-    isDrawing = false; 
-    if (activeCanvas) {
-        activeCanvas.style.pointerEvents = 'none'; 
-        activeCanvas = null;
-    }
-    activeScreenshotIndex = -1;
-  }
-  document.getElementById('enableDrawingMode').textContent = drawingEnabled ? 'Disable Drawing' : 'Enable Drawing';
-  document.getElementById('enableDrawingMode').classList.toggle('active', drawingEnabled);
-});
+// "Enable Drawing" button functionality is removed. Tools are always "enabled".
+// document.getElementById('enableDrawingMode').addEventListener('click', () => { ... }); // REMOVED
 
 document.getElementById('toolHighlighter').addEventListener('click', () => {
-  if (drawingEnabled) {
     currentDrawingTool = (currentDrawingTool === 'highlighter' ? 'none' : 'highlighter');
     updateActiveToolButton(currentDrawingTool === 'highlighter' ? 'toolHighlighter' : null);
-  }
+    setCanvasPointerEvents(currentDrawingTool !== 'none');
 });
 
 document.getElementById('toolCircle').addEventListener('click', () => {
-  if (drawingEnabled) {
     currentDrawingTool = (currentDrawingTool === 'circle' ? 'none' : 'circle');
     updateActiveToolButton(currentDrawingTool === 'circle' ? 'toolCircle' : null);
-  }
+    setCanvasPointerEvents(currentDrawingTool !== 'none');
 });
 
 document.getElementById('toolCrop').addEventListener('click', () => {
-  if (drawingEnabled) {
     currentDrawingTool = (currentDrawingTool === 'crop' ? 'none' : 'crop');
     updateActiveToolButton(currentDrawingTool === 'crop' ? 'toolCrop' : null);
-  }
+    setCanvasPointerEvents(currentDrawingTool !== 'none');
 });
 
-function updateDrawingToolButtons() {
-  const highlighterBtn = document.getElementById('toolHighlighter');
-  const circleBtn = document.getElementById('toolCircle');
-  const cropBtn = document.getElementById('toolCrop');
-
-  [highlighterBtn, circleBtn, cropBtn].forEach(btn => {
-    if(btn) {
-        btn.disabled = !drawingEnabled;
-        if (!drawingEnabled) btn.classList.remove('active');
+function setCanvasPointerEvents(enableDrawing) {
+    const canvases = document.querySelectorAll('.page-preview canvas');
+    canvases.forEach(c => {
+        c.style.cursor = enableDrawing ? 'crosshair' : 'default';
+        c.style.pointerEvents = enableDrawing ? 'auto' : 'none';
+    });
+     if (!enableDrawing && activeCanvas) {
+        activeCanvas.style.pointerEvents = 'none';
+        isDrawing = false; // Ensure drawing stops if tool is deselected
+        // activeCanvas = null; // Maybe don't nullify, just make non-interactive
     }
-  });
-  
-  if (drawingEnabled) {
-    if(currentDrawingTool !== 'none'){
-        updateActiveToolButton(`tool${currentDrawingTool.charAt(0).toUpperCase() + currentDrawingTool.slice(1)}`);
-    } else {
-        updateActiveToolButton(null); 
-    }
-  } else {
-    updateActiveToolButton(null); 
-  }
 }
+
+
+function updateDrawingToolButtons() {
+  // Buttons are no longer disabled/enabled based on a global drawingEnabled flag.
+  // They are always "enabled" to be selected.
+  // Their 'active' class is handled by updateActiveToolButton.
+  // const highlighterBtn = document.getElementById('toolHighlighter');
+  // const circleBtn = document.getElementById('toolCircle');
+  // const cropBtn = document.getElementById('toolCrop');
+  // [highlighterBtn, circleBtn, cropBtn].forEach(btn => {
+  //   if(btn) {
+  //       btn.disabled = false; // Always enabled
+  //   }
+  // });
+  
+  // If a tool is active, ensure its button reflects that, otherwise no tool is active.
+  if (currentDrawingTool !== 'none') {
+    updateActiveToolButton(`tool${currentDrawingTool.charAt(0).toUpperCase() + currentDrawingTool.slice(1)}`);
+  } else {
+    updateActiveToolButton(null); // No tool selected
+  }
+  setCanvasPointerEvents(currentDrawingTool !== 'none');
+}
+
 
 function updateActiveToolButton(activeButtonId) {
     ['toolHighlighter', 'toolCircle', 'toolCrop'].forEach(id => {
