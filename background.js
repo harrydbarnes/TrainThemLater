@@ -3,8 +3,10 @@ let audioStream = null;
 let mediaRecorder = null;
 let audioChunks = [];
 let recordedAudioBlob = null;
-let isActuallyRecording = false; 
+let isActuallyRecording = false;
 let currentTabUrl = ''; // To store the URL of the tab where recording starts
+let desktopStream = null;
+let videoElement = null;
 
 const RECORDING_ICON_PATH = {
   "16": "icons/icon16_rec.png",
@@ -91,188 +93,211 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         
         const failStartRecording = (errorMsg) => {
             console.error("Background: Failing start recording:", errorMsg);
-            isActuallyRecording = false; 
+            isActuallyRecording = false;
             updateActionIcon(false);
             chrome.storage.local.set({ isRecording: false, pageUrlForTitle: '' }); // Clear URL too
-            notifyUIsOfRecordingState(false); 
+            notifyUIsOfRecordingState(false);
             sendResponse({ success: false, error: errorMsg });
             if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); audioStream = null; }
-            mediaRecorder = null; 
-            audioChunks = []; 
+            if (desktopStream) { desktopStream.getTracks().forEach(track => track.stop()); desktopStream = null; }
+            if (videoElement) { videoElement.srcObject = null; videoElement = null;}
+            mediaRecorder = null;
+            audioChunks = [];
         };
 
-        if (recordAudio) {
-          chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
-            if (chrome.runtime.lastError || !stream) {
-              failStartRecording('Failed to start audio capture: ' + (chrome.runtime.lastError?.message || "Stream is null"));
+        // Start desktop capture
+        chrome.desktopCapture.chooseDesktopMedia(
+          ['screen', 'window', 'tab', 'audio'],
+          sender.tab, // Or null if not called from a tab
+          (streamId, options) => {
+            if (chrome.runtime.lastError || !streamId) {
+              failStartRecording('Failed to choose desktop media: ' + (chrome.runtime.lastError?.message || "No stream ID returned"));
               return;
             }
-            audioStream = stream;
-            try {
-              mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-            } catch (e) {
-              failStartRecording('Failed to create MediaRecorder: ' + e.message);
-              return;
-            }
-            audioChunks = []; recordedAudioBlob = null;
-            mediaRecorder.ondataavailable = (event) => { if (event.data.size > 0) audioChunks.push(event.data); };
-            mediaRecorder.onstop = () => { 
-              if (isActuallyRecording) { 
-                  console.warn("Background: Audio stream stopped unexpectedly. Stopping recording.");
-                  isActuallyRecording = false;
-                  updateActionIcon(false);
-                  if (audioChunks.length > 0) recordedAudioBlob = new Blob(audioChunks, { type: 'audio/webm' }); else recordedAudioBlob = null;
-                  audioChunks = [];
-                  if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); audioStream = null; }
-                  mediaRecorder = null;
-                  chrome.storage.local.set({ isRecording: false });
-                  notifyUIsOfRecordingState(false);
-                  chrome.storage.local.get(['screenshots', 'pageUrlForTitle'], (result) => { // Get URL too
-                    const editorDataForUnexpectedStop = { 
-                        screenshots: result.screenshots || [], 
-                        audioAvailable: !!recordedAudioBlob,
-                        pageUrl: result.pageUrlForTitle || currentTabUrl || ''
-                    };
-                     chrome.storage.local.set({ pendingEditorData: editorDataForUnexpectedStop, screenshots: [], pageUrlForTitle: '' }, () => {
-                        if (!chrome.runtime.lastError) {
-                             chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=editor&source=background&timestamp=' + Date.now()) });
-                        } else {
-                            console.error("Background: Storage error during unexpected stop processing for editor data.");
-                        }
-                     });
-                  });
+
+            const videoConstraints = {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: streamId,
+                minWidth: 1280,
+                maxWidth: 1920, // Or screen.width
+                minHeight: 720,
+                maxHeight: 1080 // Or screen.height
               }
             };
-            try {
-                mediaRecorder.start();
-            } catch (e) {
-                failStartRecording('Failed to start MediaRecorder: ' + e.message);
-                return;
-            }
-            console.log('Background: MediaRecorder started for audio.');
-            if (stream) {
-                 stream.oninactive = mediaRecorder.onstop; 
-            }
-            completeStartRecording();
-          });
-        } else { 
-          recordedAudioBlob = null;
-          completeStartRecording();
-        }
-      });
-      return true; 
+            
+            const constraints = {
+                audio: options.canRequestAudioTrack ? {
+                    mandatory: {
+                        chromeMediaSource: 'desktop', // For audio from the chosen desktop stream
+                        chromeMediaSourceId: streamId
+                    }
+                } : false,
+                video: videoConstraints
+            };
 
-    case 'captureScreenshot':
-      if (!isActuallyRecording) {
-        sendResponse({ success: false, error: 'Not recording.' });
-        return false;
-      }
-      chrome.tabs.captureVisibleTab(null, { format: 'png' }, (dataUrl) => {
-        if (chrome.runtime.lastError) {
-          sendResponse({ success: false, error: 'Failed to capture screenshot: ' + chrome.runtime.lastError.message });
-        } else {
-          chrome.storage.local.get(['screenshots'], (result) => {
-            const screenshots = result.screenshots || [];
-            screenshots.push({
-              dataUrl, clickX: message.clickX, clickY: message.clickY,
-              annotation: '', drawings: [], cropRegion: null,
-              originalIndex: screenshots.length 
-            });
-            chrome.storage.local.set({ screenshots }, () => {
-              if (chrome.runtime.lastError) {
-                sendResponse({ success: false, error: "Storage error saving screenshot" });
-              } else {
-                sendResponse({ success: true });
-              }
-            });
-          });
-        }
+            navigator.mediaDevices.getUserMedia(constraints)
+              .then(stream => {
+                desktopStream = stream;
+                videoElement = document.createElement('video');
+                videoElement.srcObject = desktopStream;
+                videoElement.onloadedmetadata = () => {
+                  videoElement.play().catch(e => failStartRecording("Video element play failed: " + e.message));
+                };
+                videoElement.onerror = () => failStartRecording('Video element error.');
+
+                desktopStream.oninactive = () => {
+                    console.warn("Background: Desktop stream became inactive. Stopping recording.");
+                    // Check if we are in a state where a manual stop is needed.
+                    // The 'stopRecording' message handler might have already been called if user clicked stop.
+                    // This handles cases like user stopping sharing via browser UI.
+                    if (isActuallyRecording) {
+                         // Simulate a stopRecording call or directly call parts of its logic
+                        // This ensures cleanup and UI notification.
+                        // Avoid calling sendResponse if this isn't part of a direct message flow.
+                        handleStopRecordingInternally("Desktop stream ended by user or system.");
+                    }
+                };
+
+
+                // Audio Handling
+                let audioSourceStream = null;
+                if (recordAudio) {
+                    if (options.canRequestAudioTrack && desktopStream.getAudioTracks().length > 0) {
+                        console.log("Background: Using audio from desktop capture stream.");
+                        audioSourceStream = new MediaStream(desktopStream.getAudioTracks());
+                    } else {
+                        // Attempt tabCapture as a fallback if desktop audio wasn't chosen or available
+                        console.log("Background: Desktop audio not selected/available. Attempting tab audio capture for recording.");
+                        // This part needs to be handled carefully due to its async nature within a promise
+                        // We will set up audio after this block, potentially after an async tab capture
+                        // For now, we mark that we need to capture tab audio.
+                    }
+                }
+
+                const setupAudioRecorder = (finalAudioStream) => {
+                    if (!recordAudio || !finalAudioStream) {
+                        recordedAudioBlob = null;
+                        completeStartRecording(); // Proceed without audio
+                        return;
+                    }
+                    audioStream = finalAudioStream; // Store the stream being recorded
+                    try {
+                        mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+                        audioChunks = []; recordedAudioBlob = null;
+                        mediaRecorder.ondataavailable = (event) => { if (event.data.size > 0) audioChunks.push(event.data); };
+                        mediaRecorder.onstop = () => {
+                            // This onstop is for the audio media recorder.
+                            // It might be triggered by the audio stream ending or by a manual stop.
+                            console.log("Background: MediaRecorder (audio) stopped.");
+                            if (audioChunks.length > 0) {
+                                recordedAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                            } else {
+                                recordedAudioBlob = null;
+                            }
+                            audioChunks = [];
+                            // Don't nullify audioStream here if it's from desktopStream, as desktopStream handles its own tracks.
+                            // If it was a separate tabCapture stream, it's fine.
+                            if (audioStream !== desktopStream && audioStream?.getTracks) { // Only if it's a separate stream
+                                audioStream.getTracks().forEach(track => track.stop());
+                            }
+                            // If !isActuallyRecording, it means stopRecording was called, which handles other cleanups.
+                        };
+                        mediaRecorder.start();
+                        console.log(`Background: MediaRecorder started for ${audioStream === desktopStream ? 'desktop' : 'tab'} audio.`);
+                        // Handle if the specific audioStream itself becomes inactive
+                        audioStream.oninactive = () => {
+                            console.warn(`Background: ${audioStream === desktopStream ? 'Desktop' : 'Tab'} audio stream became inactive.`);
+                            if (mediaRecorder && mediaRecorder.state === "recording") {
+                                mediaRecorder.stop();
+                            }
+                        };
+                        completeStartRecording();
+                    } catch (e) {
+                        failStartRecording(`Failed to create or start MediaRecorder for audio: ${e.message}`);
+                    }
+                };
+
+                if (recordAudio && !audioSourceStream) { // Need to try tab capture
+                    chrome.tabCapture.capture({ audio: true, video: false }, (tabAudioStream) => {
+                        if (chrome.runtime.lastError || !tabAudioStream) {
+                            console.warn('Background: Failed to start tab audio capture as fallback: ' + (chrome.runtime.lastError?.message || "Stream is null"));
+                            setupAudioRecorder(null); // Proceed without audio
+                        } else {
+                            console.log("Background: Successfully captured tab audio as fallback.");
+                            setupAudioRecorder(tabAudioStream);
+                        }
+                    });
+                } else { // Desktop audio is available, or no audio requested
+                    setupAudioRecorder(audioSourceStream);
+                }
+              })
+              .catch(err => {
+                failStartRecording('Failed to get user media for desktop stream: ' + err.message);
+              });
+          }
+        );
       });
       return true;
 
-    case 'stopRecording':
-      if (!isActuallyRecording && (!mediaRecorder || mediaRecorder.state !== "recording")) {
-        console.warn("Background: 'stopRecording' called but was not recording or already stopped.");
-        sendResponse({ success: false, error: 'Was not recording or already stopped.' });
+    case 'captureScreenshot':
+      if (!isActuallyRecording || !desktopStream || !videoElement) {
+        sendResponse({ success: false, error: 'Not recording or desktop stream not available.' });
         return false;
       }
-      
-      const wasRecording = isActuallyRecording; 
-      isActuallyRecording = false; 
-      updateActionIcon(false);
-      chrome.storage.local.set({ isRecording: false }, () => {
-        if(chrome.runtime.lastError) console.warn("Background: Error setting isRecording to false in storage on stop:", chrome.runtime.lastError.message);
-      }); 
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = videoElement.videoWidth;
+        canvas.height = videoElement.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/png');
 
-      const processStopAndRespond = () => {
-        chrome.storage.local.get(['screenshots', 'pageUrlForTitle'], (result) => {
+        chrome.storage.local.get(['screenshots'], (result) => {
           const screenshots = result.screenshots || [];
-          const pageUrl = result.pageUrlForTitle || currentTabUrl || ''; 
-          
-          const editorData = { screenshots, audioAvailable: !!recordedAudioBlob, pageUrl: pageUrl };
-
-          chrome.storage.local.set({ 
-              pendingEditorData: editorData, 
-              screenshots: [], 
-              pageUrlForTitle: '' // Clear it after use
-            }, () => {
+          screenshots.push({
+            dataUrl,
+            clickX: message.clickX,
+            clickY: message.clickY,
+            imageWidth: videoElement.videoWidth, // Full width of the captured source
+            imageHeight: videoElement.videoHeight, // Full height of the captured source
+            annotation: '',
+            drawings: [],
+            cropRegion: null,
+            originalIndex: screenshots.length
+          });
+          chrome.storage.local.set({ screenshots }, () => {
             if (chrome.runtime.lastError) {
-              console.error("Background: Error setting pendingEditorData/clearing screenshots:", chrome.runtime.lastError.message);
-              notifyUIsOfRecordingState(false); 
-              sendResponse({ success: false, error: "Storage error before opening editor." });
-              return;
-            }
-            
-            console.log('Background: Data for editor stored. Opening editor tab.');
-            chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=editor&source=background&timestamp=' + Date.now()) });
-            
-            notifyUIsOfRecordingState(false); 
-
-            if (wasRecording) { 
-              sendResponse({ success: true, stopped: true });
+              sendResponse({ success: false, error: "Storage error saving screenshot" });
             } else {
-              sendResponse({ success: false, error: "No recording was active to stop."});
+              sendResponse({ success: true });
             }
           });
         });
-      };
-
-      if (mediaRecorder && mediaRecorder.state === "recording") {
-        mediaRecorder.onstop = () => { 
-          if (audioChunks.length > 0) recordedAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-          else recordedAudioBlob = null;
-          audioChunks = [];
-          if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); audioStream = null; }
-          mediaRecorder = null;
-          processStopAndRespond();
-        };
-        try { 
-            mediaRecorder.stop(); 
-        } catch (e) {
-          console.error("Background: Error stopping mediaRecorder:", e);
-          if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); audioStream = null; }
-          recordedAudioBlob = (audioChunks.length >0) ? new Blob(audioChunks, { type: 'audio/webm'}) : null;
-          audioChunks = [];
-          mediaRecorder = null;
-          processStopAndRespond(); 
-        }
-      } else { 
-        if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); audioStream = null; }
-        if (audioChunks.length > 0 && !recordedAudioBlob) recordedAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        else if (audioChunks.length === 0 && !recordedAudioBlob) recordedAudioBlob = null; 
-        audioChunks = [];
-        mediaRecorder = null;
-        processStopAndRespond();
+      } catch (e) {
+        console.error("Background: Error capturing screenshot from video stream:", e);
+        sendResponse({ success: false, error: 'Failed to capture screenshot from video stream: ' + e.message });
       }
-      return true; 
+      return true;
+
+    case 'stopRecording':
+      if (!isActuallyRecording && !desktopStream) { // Simplified condition
+        console.warn("Background: 'stopRecording' (message) called but not actively recording or no desktop stream.");
+        // Allow to proceed if only audio part was active and needs stopping, but desktopStream might be gone
+        // This path will mostly clean up whatever is left.
+      }
+
+      // Call the internal handler that can also be used by stream events
+      handleStopRecordingInternally("User requested stop.", sendResponse);
+      return true; // Indicate async response if sendResponse is used by internal handler
 
     case 'getAudioBlob':
       sendResponse({ audioBlob: recordedAudioBlob });
-      return true; 
+      return true;
 
     case 'getRecordingState':
       sendResponse({ isRecording: isActuallyRecording });
-      return false; 
+      return false;
 
     default:
       console.warn("Background: Unknown action received - ", message.action);
